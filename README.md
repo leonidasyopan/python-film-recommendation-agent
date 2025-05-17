@@ -17,7 +17,7 @@ Esta Prova de Conceito (POC) é uma aplicação de linha de comando em Python qu
 ## Instruções de Configuração
 
 1.  **Diretório do Projeto:**
-    Certifique-se de que todos os arquivos do projeto (`main.py`, `requirements.txt`, `.env`, este `README_pt-BR.md`, `README.md` e `.gitignore`) estejam no mesmo diretório principal do projeto (por exemplo, `movie_picker_poc/`).
+    Certifique-se de que todos os arquivos do projeto (`main.py`, `requirements.txt`, `.env`, este `README_pt-BR.md`, `README.md` e `.gitignore`) estejam no mesmo diretório principal do projeto (por exemplo, `python-film-recommendation-agent/`).
 
 2.  **Crie um Ambiente Virtual Python (Altamente Recomendado):**
     Abra o terminal ou prompt de comando do seu computador. Navegue até o diretório do seu projeto.
@@ -67,7 +67,7 @@ Esta Prova de Conceito (POC) é uma aplicação de linha de comando em Python qu
 
 O projeto deve ter os seguintes arquivos e pastas:
 
-* `movie_picker_poc/` (Sua pasta principal do projeto)
+* `python-film-recommendation-agent/` (Sua pasta principal do projeto)
     * `.env` (Este arquivo armazena suas chaves de API secretas. Ele deve estar listado no `.gitignore`.)
     * `.gitignore` (Este arquivo informa ao Git quais arquivos/pastas ignorar.)
     * `main.py` (Este é o script Python principal contendo toda a lógica da aplicação e as funções dos agentes.)

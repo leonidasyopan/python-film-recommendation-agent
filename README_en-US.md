@@ -58,7 +58,7 @@ python main.py
 The application will then prompt you for input in the console.
 
 Project Structure
-movie_picker_poc/
+python-film-recommendation-agent/
 ├── .env                     # Stores API keys (ignored by Git)
 ├── .gitignore               # Specifies intentionally untracked files
 ├── main.py                  # Main application script

@@ -1,4 +1,4 @@
-# movie_picker_poc/main.py
+# python-film-recommendation-agent/main.py
 
 import os
 import requests  # For making HTTP requests to TMDb
