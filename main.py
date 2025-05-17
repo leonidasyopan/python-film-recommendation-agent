@@ -30,7 +30,7 @@ if not TMDB_API_KEY:
     print("🔴 TMDB_API_KEY not found in .env file. TMDb features will not work. Please set it and restart.")
     # exit() # You might want to exit if TMDb is critical and missing
 
-TMDB_BASE_URL = "[https://api.themoviedb.org/3](https://api.themoviedb.org/3)"
+TMDB_BASE_URL = "https://api.themoviedb.org/3"
 
 # --- HELPER FUNCTIONS ---
 
