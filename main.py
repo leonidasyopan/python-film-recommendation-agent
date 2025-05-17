@@ -167,46 +167,84 @@ def agent_user_context_collector():
     }
 
 def agent_content_prospector(user_context):
-    """Agent 2: Finds initial movie/TV show prospects from TMDb using user's interests."""
-    print("\n--- 🔎 Agent 2: Content Prospector (Searching TMDb) ---")
-    if not TMDB_API_KEY: return [] 
+    """Agent 2: Uses Gemini to expand interests, then finds initial movie/TV show prospects from TMDb."""
+    print("\n--- 🔎 Agent 2: Content Prospector (Expanding Interests & Searching TMDb) ---")
+    if not TMDB_API_KEY: return []
 
-    print(f"Searching TMDb for content matching: '{user_context['interests_query']}' for country '{user_context['country_code']}'...")
+    original_interest_query = user_context['interests_query']
+    expanded_search_terms = [original_interest_query] # Start with the original query
 
-    search_params = {
-        'query': user_context['interests_query'],
-        'include_adult': 'false',
-        'language': 'en-US', 
-        'region': user_context['country_code'], 
-        'page': 1
-    }
-    data = make_tmdb_request("/search/multi", params=search_params)
-
-    prospects = []
-    if data and 'results' in data:
-        for item in data['results']:
-            media_type = item.get('media_type')
-            if media_type in ['movie', 'tv']:
-                title = item.get('title') if media_type == 'movie' else item.get('name')
-                tmdb_id = item.get('id')
-                # Ensure it has a title, ID, and a decent overview (skip items with very little info)
-                overview = item.get('overview', '')
-                if title and tmdb_id and len(overview) > 20: # Arbitrary length to ensure some description
-                    prospects.append({
-                        'tmdb_id': tmdb_id,
-                        'title': title,
-                        'media_type': media_type,
-                        'overview': overview,
-                        'popularity': item.get('popularity', 0.0) 
-                    })
-    
-    prospects = sorted(prospects, key=lambda x: x['popularity'], reverse=True)[:7] # Increased to top 7 for more chances
-
-    if prospects:
-        print(f"✅ Found {len(prospects)} initial prospects from TMDb (sorted by popularity).")
+    if gemini_model: # Check if Gemini is available
+        print(f"🧠 Asking Gemini to expand on interest: '{original_interest_query}'...")
+        try:
+            prompt_for_gemini_expansion = (
+                f"A child is interested in '{original_interest_query}'. "
+                f"Suggest 3 diverse but related movie search keywords or short phrases to find suitable movies/shows. "
+                f"Examples: if interest is 'funny animals', suggestions could be 'talking animal comedies, animated animal adventures, family movies with pets'. "
+                f"If interest is 'space adventure', suggestions could be 'kids sci-fi movies, galaxy exploration cartoons, alien encounter films for children'. "
+                f"Provide only the comma-separated keywords/phrases, without numbering or bullets."
+            )
+            response = gemini_model.generate_content(prompt_for_gemini_expansion)
+            if hasattr(response, 'text') and response.text:
+                additional_terms = [term.strip() for term in response.text.split(',') if term.strip()]
+                if additional_terms:
+                    expanded_search_terms.extend(additional_terms)
+                    print(f"💡 Gemini suggested additional search terms: {additional_terms}")
+            else:
+                print("⚠️ Gemini provided no usable expansion, using original query only.")
+        except Exception as e:
+            print(f"🔴 Error during Gemini interest expansion: {e}. Using original query only.")
     else:
-        print(f"⚠️ No initial prospects found on TMDb for the query: '{user_context['interests_query']}'. Try a different interest query or check for typos.")
-    return prospects
+        print("ℹ️ Gemini model not available. Using original interest query only for TMDb search.")
+
+    all_prospects_map = {} # Use a dictionary to store unique prospects by ID
+
+    # Limit the number of search terms to use to avoid too many API calls (e.g., original + top 2 from Gemini)
+    # For this POC, let's try original + up to 2 Gemini terms if available.
+    search_terms_to_use = list(set(expanded_search_terms))[:3] 
+    print(f"Searching TMDb with terms: {search_terms_to_use} for country '{user_context['country_code']}'...")
+
+    for term in search_terms_to_use:
+        if not term: continue # Skip empty terms
+        print(f"  -> Searching TMDb for: '{term}'")
+        search_params = {
+            'query': term,
+            'include_adult': 'false',
+            'language': 'en-US',
+            'region': user_context['country_code'],
+            'page': 1
+        }
+        data = make_tmdb_request("/search/multi", params=search_params)
+
+        if data and 'results' in data:
+            for item in data['results']:
+                media_type = item.get('media_type')
+                if media_type in ['movie', 'tv']:
+                    title = item.get('title') if media_type == 'movie' else item.get('name')
+                    tmdb_id = item.get('id')
+                    overview = item.get('overview', '')
+                    # Add to map only if it has title, ID, overview, and not already added
+                    if title and tmdb_id and len(overview) > 20 and tmdb_id not in all_prospects_map:
+                        all_prospects_map[tmdb_id] = {
+                            'tmdb_id': tmdb_id,
+                            'title': title,
+                            'media_type': media_type,
+                            'overview': overview,
+                            'popularity': item.get('popularity', 0.0)
+                        }
+    
+    # Convert map values to a list and sort by popularity
+    final_prospects_list = sorted(list(all_prospects_map.values()), key=lambda x: x['popularity'], reverse=True)
+    
+    # Aim for up to 10 unique prospects
+    final_prospects_list = final_prospects_list[:10] 
+
+    if final_prospects_list:
+        print(f"✅ Found {len(final_prospects_list)} unique prospects from TMDb after expanding interests (sorted by popularity).")
+    else:
+        print(f"⚠️ No initial prospects found on TMDb for the query/expanded terms: '{user_context['interests_query']}'. Try a different interest query or check for typos.")
+    
+    return final_prospects_list
 
 def agent_detailed_enrichment(prospects_list, country_code_target):
     """Agent 3: Enriches prospects with details like genres, TMDb rating, and country-specific age certification."""
