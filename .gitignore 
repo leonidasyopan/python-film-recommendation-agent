@@ -1,0 +1,20 @@
+# python-film-recommendation-agent/.gitignore
+
+# Ignore environment file
+.env
+
+# Python bytecode and cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment (if you use one, e.g., venv, .venv)
+.venv/
+venv/
+ENV/
+env/
+
+# IDE and OS specific files
+.idea/
+.vscode/
+*.DS_Store

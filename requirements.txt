@@ -1,0 +1,4 @@
+# python-film-recommendation-agent/requirements.txt
+google-generativeai
+requests
+python-dotenv
