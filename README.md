@@ -23,7 +23,7 @@ Esta Prova de Conceito (POC) é uma aplicação de linha de comando em Python qu
     Abra o terminal ou prompt de comando do seu computador. Navegue até o diretório do seu projeto.
     Execute o seguinte comando para criar um ambiente virtual (chamado `venv` aqui):
     ```bash
-    python -m venv venv
+    python3 -m venv .venv
     ```
     Ative o ambiente virtual criado:
     * No Windows:
@@ -32,7 +32,7 @@ Esta Prova de Conceito (POC) é uma aplicação de linha de comando em Python qu
         ```
     * No macOS ou Linux:
         ```bash
-        source venv/bin/activate
+        source .venv/bin/activate
         ```
     Seu prompt de comando agora deve normalmente mostrar `(venv)` no início da linha, indicando que o ambiente virtual está ativo.
 
