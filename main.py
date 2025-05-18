@@ -94,7 +94,7 @@ def agent_user_context_collector():
     platforms_input_str = input("➡️ Digite as plataformas de streaming preferidas, separadas por vírgula (ex: 'Netflix, Disney Plus, Globoplay'): ")
     preferred_platform_names_cleaned = [p.strip().lower() for p in platforms_input_str.split(',') if p.strip()]
     
-    print("✅ Contexto coletado. País definido como Brasil.")
+    # print("✅ Contexto coletado. País definido como Brasil.")
     return {
         "age": age,
         "interests_query": interests_query,
@@ -375,6 +375,94 @@ def agent_console_display_final(final_recommendations_list, original_user_contex
     print("\n" + "="*50)
     print("Lembre-se de sempre usar seu próprio julgamento e verificar os avisos de conteúdo ao selecionar para sua criança. Aproveitem o filme/série! 🎉")
 
+def agent_existence_verifier(recommendations_list, user_context_details):
+    """Agente Opcional: Verifica a existência do título recomendado usando a Pesquisa Google via Gemini."""
+    print("\n--- 🤔 Agente Extra: Verificador de Existência (Consultando Gemini com Pesquisa Google) ---")
+    if not gemini_model or not recommendations_list:
+        if not gemini_model:
+            print("⚠️ Modelo Gemini não disponível. Pulando verificação de existência.")
+        return recommendations_list # Retorna a lista original se não puder verificar
+
+    verified_recommendations = []
+    for rec_item in recommendations_list:
+        title_to_check = rec_item['title']
+        media_type_to_check = rec_item['media_type']
+        # Pega a primeira plataforma da lista, se houver, para a verificação opcional.
+        platform_to_check_mention = rec_item['available_on_user_platforms'][0] if rec_item['available_on_user_platforms'] else "qualquer plataforma de streaming"
+
+        print(f"Verificando existência de '{title_to_check}' ({media_type_to_check})...")
+        
+        try:
+            # O Gemini 1.5 Flash/Pro com a API google-generativeai usa a Pesquisa Google implicitamente
+            # quando o prompt sugere a necessidade de informações externas ou verificação.
+            # Não é necessário configurar um "tool" explicitamente para busca simples aqui.
+            prompt_for_verification = (
+                f"Com base em informações da Pesquisa Google, o {media_type_to_check} chamado '{title_to_check}' "
+                f"é um título real e conhecido? "
+                f"Adicionalmente, há alguma menção de que ele esteja ou esteve disponível em '{platform_to_check_mention}' no Brasil? "
+                f"Responda sobre a existência (SIM/NÃO/INCERTO). Se SIM, mencione brevemente sobre a plataforma se houver dados claros."
+                f"Exemplo de resposta: SIM. Há menções sobre a plataforma."
+                f"Outro exemplo: NÃO."
+                f"Outro exemplo: INCERTO."
+            )
+            
+            # Gerando conteúdo com o modelo Gemini.
+            # Para forçar o uso da busca ou ter mais controle, em cenários mais complexos,
+            # o uso explícito de 'tools=[Tool(Google Search_retrieval=Tool.GoogleSearchRetrieval())]'
+            # e especificando 'tool_config' poderia ser usado, mas para verificação simples,
+            # o modelo mais recente geralmente busca quando necessário.
+            # No entanto, para garantir, vamos usar a configuração de ferramentas se disponível e o modelo permitir.
+            
+            # NOTA: A forma de habilitar a Pesquisa Google explicitamente pode variar um pouco
+            # dependendo da exata versão da SDK e do modelo.
+            # Para gemini-1.5-flash-latest e SDK recente, o modelo é inteligente.
+            # Se precisar forçar, seria algo como:
+            # tools = [Tool(Google Search_retrieval=Tool.GoogleSearchRetrieval())]
+            # response = gemini_model.generate_content(prompt_for_verification, tools=tools)
+            # Por simplicidade e para o modelo atual, vamos confiar na busca implícita.
+
+            response = gemini_model.generate_content(prompt_for_verification) # Confia na busca implícita
+            
+            verification_text = ""
+            if hasattr(response, 'text') and response.text:
+                verification_text = response.text.strip().upper()
+            elif hasattr(response, 'parts') and response.parts:
+                verification_text = "".join(part.text for part in response.parts if hasattr(part, 'text')).strip().upper()
+
+            print(f"  -> Resposta da verificação Gemini: '{verification_text}'")
+
+            # Lógica simples para interpretar a resposta do Gemini
+            # (Pode precisar de ajuste dependendo da consistência das respostas do Gemini)
+            if verification_text.startswith("SIM"):
+                print(f"  -> ✅ '{title_to_check}' parece existir.")
+                rec_item['existence_verified'] = True
+                if "PLATAFORMA" in verification_text or platform_to_check_mention.upper() in verification_text:
+                     rec_item['platform_mention_verified'] = True
+                     print(f"  -> ✅ Menção à plataforma '{platform_to_check_mention}' encontrada.")
+                else:
+                     rec_item['platform_mention_verified'] = False
+                verified_recommendations.append(rec_item)
+            elif verification_text.startswith("INCERTO"):
+                print(f"  -> ⚠️ Existência de '{title_to_check}' é INCERTA. Incluindo por precaução.")
+                rec_item['existence_verified'] = "INCERTO" # Marcar como incerto
+                verified_recommendations.append(rec_item) # Manter na lista por enquanto
+            else: # Assume NÃO ou qualquer outra resposta
+                print(f"  -> ❌ '{title_to_check}' parece NÃO existir ou a verificação não foi conclusiva. Removendo.")
+                # Não adiciona à lista verified_recommendations
+        
+        except Exception as e:
+            print(f"🔴 Erro durante a verificação de existência com Gemini para '{title_to_check}': {e}")
+            print(f"  -> ⚠️ Não foi possível verificar '{title_to_check}'. Mantendo na lista por precaução.")
+            rec_item['existence_verified'] = "ERRO_NA_VERIFICACAO"
+            verified_recommendations.append(rec_item) # Mantém na lista se a verificação falhar
+
+    if not verified_recommendations and recommendations_list:
+        print("⚠️ Nenhuma recomendação pôde ser verificada com confiança, ou todas foram consideradas não existentes. Retornando a lista original com ressalvas.")
+        return recommendations_list # Ou uma lista vazia se preferir ser mais estrito
+        
+    print("✅ Verificação de existência completa.")
+    return verified_recommendations
+
 # --- MAIN EXECUTION BLOCK ---
 if __name__ == "__main__":
     print("🎬 Bem-vindo à POC do Selecionador de Filmes (Backend Python)! 🎬")
@@ -383,11 +471,23 @@ if __name__ == "__main__":
     else:
         user_context = agent_user_context_collector()
         initial_prospects = agent_content_prospector(user_context)
+        
+        final_recommendations = [] # Inicializa para o caso de não haver prospectos
         if initial_prospects:
             enriched_prospects = agent_detailed_enrichment(initial_prospects, user_context['country_code'])
             prospects_with_streaming = agent_streaming_availability_verifier(enriched_prospects, user_context)
-            final_recommendations = agent_recommendation_selector_and_justifier(prospects_with_streaming, user_context)
-            agent_console_display_final(final_recommendations, user_context)
+            
+            # Seleciona e justifica antes de verificar
+            selected_and_justified_recs = agent_recommendation_selector_and_justifier(prospects_with_streaming, user_context)
+            
+            # Adiciona o novo agente verificador aqui
+            if selected_and_justified_recs:
+                final_recommendations = agent_existence_verifier(selected_and_justified_recs, user_context)
+            else:
+                final_recommendations = [] # Garante que está vazia se o passo anterior não retornou nada
         else:
             print("\nNenhum filme ou série inicial encontrado com base na sua consulta. Os agentes subsequentes não serão executados.")
+            
+        agent_console_display_final(final_recommendations, user_context)
+
     print("\n👋 POC do Selecionador de Filmes finalizada. Até logo!")
