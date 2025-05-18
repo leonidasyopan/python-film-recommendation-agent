@@ -1,221 +1,156 @@
-# python-film-recommendation-agent/main.py
+# movie_picker_poc/main.py
 
 import os
-import requests  # For making HTTP requests to TMDb
-import google.generativeai as genai  # For Google Gemini API
-from dotenv import load_dotenv  # To load API keys from .env file
-import json  # To pretty print JSON for debugging if needed
+import requests
+import google.generativeai as genai
+from dotenv import load_dotenv
+import json
 
 # --- CONFIGURATION ---
-
-# Load environment variables from .env file
 load_dotenv()
-
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-TMDB_API_KEY = os.getenv("TMDB_API_KEY") # This should be your TMDb API Key (v3 auth)
+TMDB_API_KEY = os.getenv("TMDB_API_KEY")
 
-# Configure the Gemini API client
 gemini_model = None
 if GEMINI_API_KEY:
     try:
         genai.configure(api_key=GEMINI_API_KEY)
-        gemini_model = genai.GenerativeModel('gemini-1.5-flash-latest') # Or your preferred model like 'gemini-pro'
-        print("✅ Gemini API configured successfully.")
+        gemini_model = genai.GenerativeModel('gemini-1.5-flash-latest')
+        print("✅ API do Gemini configurada com sucesso.")
     except Exception as e:
-        print(f"🔴 Error configuring Gemini API: {e}. Gemini features will be skipped.")
+        print(f"🔴 Erro ao configurar a API do Gemini: {e}. Funcionalidades do Gemini serão puladas.")
 else:
-    print("⚠️ GEMINI_API_KEY not found in .env file. Gemini features will be skipped.")
+    print("⚠️ GEMINI_API_KEY não encontrada no arquivo .env. Funcionalidades do Gemini serão puladas.")
 
 if not TMDB_API_KEY:
-    print("🔴 TMDB_API_KEY not found in .env file. TMDb features will not work. Please set it and restart.")
-    # exit() # You might want to exit if TMDb is critical and missing
+    print("🔴 TMDB_API_KEY não encontrada no arquivo .env. Funcionalidades do TMDb não funcionarão. Por favor, configure-a e reinicie.")
 
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
+TARGET_COUNTRY_CODE = "BR" # Hardcoded for Brazil
+TARGET_LANGUAGE_TMDB = "pt-BR" # For TMDb results in Portuguese
 
-# --- HELPER FUNCTIONS ---
+# --- HELPER FUNCTIONS --- (make_tmdb_request remains mostly the same, ensure 'language' can be passed or is defaulted to TARGET_LANGUAGE_TMDB)
 
 def make_tmdb_request(endpoint, params=None, method="GET"):
-    """Helper function to make requests to TMDb API."""
     if not TMDB_API_KEY:
-        print("ℹ️ TMDB API key not available. Skipping TMDb request.")
+        print("ℹ️ Chave da API do TMDb não disponível. Pulando requisição ao TMDb.")
         return None
-
     if params is None:
         params = {}
-    # Add the api_key to every request to TMDb
     params['api_key'] = TMDB_API_KEY
+    if 'language' not in params: # Default language for TMDb
+        params['language'] = TARGET_LANGUAGE_TMDB
     
-    headers = {
-        "accept": "application/json"
-    }
-
+    headers = {"accept": "application/json"}
     full_url = f"{TMDB_BASE_URL}{endpoint}"
-    # print(f"ℹ️ Making TMDb request: {method} {full_url} with params: {params}") # Debug line
-
     try:
         if method.upper() == "GET":
             response = requests.get(full_url, params=params, headers=headers)
-        # Add POST, PUT, DELETE here if needed in the future
         else:
-            print(f"🔴 Unsupported HTTP method: {method}")
+            print(f"🔴 Método HTTP não suportado: {method}")
             return None
-        
-        response.raise_for_status()  # Raises an HTTPError for bad responses (4XX or 5XX)
+        response.raise_for_status()
         return response.json()
     except requests.exceptions.HTTPError as http_err:
-        # Try to get more details from the response if it's JSON
         error_details = ""
         try:
             error_details = response.json()
-        except ValueError: # response is not JSON
-            error_details = response.text[:200] # First 200 chars
-        print(f"🔴 HTTP error occurred making TMDb request to {endpoint}: {http_err} - Status: {response.status_code}, Response: {error_details}")
+        except ValueError:
+            error_details = response.text[:200]
+        print(f"🔴 Erro HTTP ao fazer requisição ao TMDb para {endpoint}: {http_err} - Status: {response.status_code}, Resposta: {error_details}")
     except requests.exceptions.RequestException as e:
-        print(f"🔴 General error making TMDb request to {endpoint}: {e}")
+        print(f"🔴 Erro geral ao fazer requisição ao TMDb para {endpoint}: {e}")
     return None
 
-def get_country_code_from_name(country_name_input):
-    """Maps common country names to ISO 3166-1 alpha-2 codes."""
-    country_map = {
-        "brazil": "BR",
-        "brasil": "BR", # Added Portuguese name for Brazil
-        "usa": "US",
-        "united states": "US",
-        "united states of america": "US",
-        "canada": "CA",
-        "united kingdom": "GB",
-        "uk": "GB",
-        "germany": "DE",
-        "france": "FR",
-        "japan": "JP",
-        # Add more common countries as needed by your users
-    }
-    normalized_input = country_name_input.lower().strip()
-    return country_map.get(normalized_input, normalized_input.upper()) # Default to upper if not found, assuming it might be a code already
-
-def get_tmdb_provider_id_from_name(provider_name_input, media_type="all", watch_region="US"):
-    """
-    Simplified mapping of common streaming provider names to their TMDb IDs.
-    In a real app, you'd fetch `/watch/providers/movie` and `/watch/providers/tv`
-    for the user's region once, cache them, and use that for accurate ID lookup.
-    This POC uses a small hardcoded list for common services.
-    Note: Provider IDs can sometimes differ slightly by region or even name variations.
-    """
+# get_tmdb_provider_id_from_name remains useful, ensure it has Brazilian providers
+def get_tmdb_provider_id_from_name(provider_name_input, media_type="all", watch_region="BR"): # Default region BR
     provider_name_lower = provider_name_input.lower().strip()
-    
     common_provider_map = {
-        "netflix": 8,
-        "amazon prime video": 9, 
-        "prime video": 9,
-        "amazon video": 9, # Another common way users might type it
-        "disney plus": 337,
-        "disney+": 337,
-        "hbo max": 384, 
-        "max": 1899,    
-        "apple tv plus": 350, 
-        "appletv+": 350,
-        "apple tv+": 350,
-        "hulu": 15,
-        "paramount plus": 531,
-        "paramount+": 531,
-        # For Brazil (BR) specific:
-        "globoplay": 307,
-        "star plus": 619, # Star+ in Latin America
-        "star+": 619,
-        "claro video": 167,
+        "netflix": 8, "amazon prime video": 9, "prime video": 9, "amazon video": 9,
+        "disney plus": 337, "disney+": 337, "max": 1899, "hbo max": 384, # Keep HBO Max for older entries
+        "apple tv plus": 350, "appletv+": 350, "apple tv+": 350,
+        "globoplay": 307, "star plus": 619, "star+": 619, "claro video": 167,
+        "looke": 484, "paramount plus": 531, "paramount+": 531,
     }
     return common_provider_map.get(provider_name_lower)
-
 
 # --- AGENT FUNCTION DEFINITIONS ---
 
 def agent_user_context_collector():
-    """Agent 1: Collects preferences from the user via console input."""
-    print("\n--- 🙋 Agent 1: User Context Collector ---")
-    
-    while True: 
+    print("\n--- 🙋 Agente 1: Coletor de Contexto do Usuário ---")
+    while True:
         try:
-            age_str = input("➡️ Enter child's age (e.g., 5, 8, 12): ")
+            age_str = input("➡️ Digite a idade da criança (ex: 5, 8, 12): ")
             age = int(age_str)
-            if 1 <= age <= 18: 
-                break
-            else:
-                print("⚠️ Please enter a valid age between 1 and 18.")
-        except ValueError:
-            print("⚠️ Invalid input. Please enter a number for age.")
+            if 1 <= age <= 18: break
+            else: print("⚠️ Por favor, digite uma idade válida entre 1 e 18.")
+        except ValueError: print("⚠️ Entrada inválida. Por favor, digite um número para a idade.")
 
-    interests_query = input("➡️ What is the child interested in today (e.g., 'funny animation with talking animals', 'space adventure movies')? ")
+    interests_query = input("➡️ Quais são os interesses da criança hoje (ex: 'animação divertida com animais falantes', 'filmes de aventura espacial')? ")
     if not interests_query.strip():
-        print("ℹ️ No specific interests provided. Will search for generally popular content.")
-        interests_query = "popular kids movies" # Default if empty
+        print("ℹ️ Nenhum interesse específico fornecido. Buscando por conteúdo popular infantil.")
+        interests_query = "filmes infantis populares animação família"
 
-    platforms_input_str = input("➡️ Enter preferred streaming platforms, separated by commas (e.g., 'Netflix, Disney Plus, Prime Video'): ")
+    platforms_input_str = input("➡️ Digite as plataformas de streaming preferidas, separadas por vírgula (ex: 'Netflix, Disney Plus, Globoplay'): ")
     preferred_platform_names_cleaned = [p.strip().lower() for p in platforms_input_str.split(',') if p.strip()]
     
-    country_name_input = input("➡️ Enter your country for streaming availability (e.g., 'Brazil', 'USA', 'Canada'): ")
-    country_code = get_country_code_from_name(country_name_input)
-    
-    if len(country_code) != 2 or not country_code.isalpha(): # Basic check, TMDb will ultimately validate
-        print(f"⚠️ Country '{country_name_input}' mapped to '{country_code}'. This might not be a valid ISO 3166-1 code. TMDb results may be affected or default to a general region.")
-
-    print("✅ Context collected.")
+    print("✅ Contexto coletado. País definido como Brasil.")
     return {
         "age": age,
         "interests_query": interests_query,
         "preferred_platform_names": preferred_platform_names_cleaned,
-        "country_code": country_code
+        "country_code": TARGET_COUNTRY_CODE # Hardcoded
     }
 
 def agent_content_prospector(user_context):
-    """Agent 2: Uses Gemini to expand interests, then finds initial movie/TV show prospects from TMDb."""
-    print("\n--- 🔎 Agent 2: Content Prospector (Expanding Interests & Searching TMDb) ---")
+    print("\n--- 🔎 Agente 2: Investigador de Conteúdo (Expandindo Interesses & Buscando no TMDb) ---")
     if not TMDB_API_KEY: return []
 
     original_interest_query = user_context['interests_query']
-    expanded_search_terms = [original_interest_query] # Start with the original query
+    search_terms_for_tmdb = {original_interest_query}
 
-    if gemini_model: # Check if Gemini is available
-        print(f"🧠 Asking Gemini to expand on interest: '{original_interest_query}'...")
+    if gemini_model:
+        print(f"🧠 Consultando o Gemini para expandir o interesse: '{original_interest_query}'...")
         try:
             prompt_for_gemini_expansion = (
-                f"A child is interested in '{original_interest_query}'. "
-                f"Suggest 3 diverse but related movie search keywords or short phrases to find suitable movies/shows. "
-                f"Examples: if interest is 'funny animals', suggestions could be 'talking animal comedies, animated animal adventures, family movies with pets'. "
-                f"If interest is 'space adventure', suggestions could be 'kids sci-fi movies, galaxy exploration cartoons, alien encounter films for children'. "
-                f"Provide only the comma-separated keywords/phrases, without numbering or bullets."
+                f"Uma criança está interessada em '{original_interest_query}'. "
+                f"Sugira de 2 a 4 palavras-chave ou frases curtas, diversas mas relacionadas, para buscar filmes/séries adequados. "
+                f"Exemplos: se o interesse é 'animais engraçados', sugestões poderiam ser 'comédias com animais falantes, aventuras animadas com animais, filmes de família com pets'. "
+                f"Se o interesse é 'aventura espacial', sugestões poderiam ser 'filmes de ficção científica para crianças, desenhos de exploração da galáxia, filmes sobre encontros alienígenas para crianças'. "
+                f"Forneça apenas as palavras-chave/frases separadas por vírgula, sem numeração ou marcadores."
             )
             response = gemini_model.generate_content(prompt_for_gemini_expansion)
             if hasattr(response, 'text') and response.text:
                 additional_terms = [term.strip() for term in response.text.split(',') if term.strip()]
                 if additional_terms:
-                    expanded_search_terms.extend(additional_terms)
-                    print(f"💡 Gemini suggested additional search terms: {additional_terms}")
+                    for term in additional_terms: search_terms_for_tmdb.add(term)
+                    print(f"💡 Gemini sugeriu termos de busca adicionais. Conjunto combinado: {search_terms_for_tmdb}")
             else:
-                print("⚠️ Gemini provided no usable expansion, using original query only.")
+                print("⚠️ Gemini não forneceu expansão utilizável, usando apenas a consulta original.")
         except Exception as e:
-            print(f"🔴 Error during Gemini interest expansion: {e}. Using original query only.")
+            print(f"🔴 Erro durante a expansão de interesses com Gemini: {e}. Usando apenas a consulta original.")
     else:
-        print("ℹ️ Gemini model not available. Using original interest query only for TMDb search.")
+        print("ℹ️ Modelo Gemini não disponível. Usando apenas a consulta de interesse original para busca no TMDb.")
 
-    all_prospects_map = {} # Use a dictionary to store unique prospects by ID
+    all_prospects_map = {}
+    final_search_terms = list(search_terms_for_tmdb)[:4] # Limit to 4 search terms for API calls
+    if original_interest_query not in final_search_terms and len(final_search_terms) < 4:
+        final_search_terms.insert(0, original_interest_query)
+        final_search_terms = final_search_terms[:4]
+    elif original_interest_query not in final_search_terms and len(final_search_terms) >=4 :
+         final_search_terms[0] = original_interest_query
 
-    # Limit the number of search terms to use to avoid too many API calls (e.g., original + top 2 from Gemini)
-    # For this POC, let's try original + up to 2 Gemini terms if available.
-    search_terms_to_use = list(set(expanded_search_terms))[:3] 
-    print(f"Searching TMDb with terms: {search_terms_to_use} for country '{user_context['country_code']}'...")
 
-    for term in search_terms_to_use:
-        if not term: continue # Skip empty terms
-        print(f"  -> Searching TMDb for: '{term}'")
+    print(f"Buscando no TMDb com até {len(final_search_terms)} termos: {final_search_terms} para o país '{user_context['country_code']}' (idioma: {TARGET_LANGUAGE_TMDB})...")
+
+    for term in final_search_terms:
+        if not term: continue
+        print(f"  -> Buscando no TMDb por: '{term}'")
         search_params = {
-            'query': term,
-            'include_adult': 'false',
-            'language': 'en-US',
-            'region': user_context['country_code'],
-            'page': 1
+            'query': term, 'include_adult': 'false',
+            'language': TARGET_LANGUAGE_TMDB, 'region': user_context['country_code'], 'page': 1
         }
         data = make_tmdb_request("/search/multi", params=search_params)
-
         if data and 'results' in data:
             for item in data['results']:
                 media_type = item.get('media_type')
@@ -223,290 +158,236 @@ def agent_content_prospector(user_context):
                     title = item.get('title') if media_type == 'movie' else item.get('name')
                     tmdb_id = item.get('id')
                     overview = item.get('overview', '')
-                    # Add to map only if it has title, ID, overview, and not already added
                     if title and tmdb_id and len(overview) > 20 and tmdb_id not in all_prospects_map:
                         all_prospects_map[tmdb_id] = {
-                            'tmdb_id': tmdb_id,
-                            'title': title,
-                            'media_type': media_type,
-                            'overview': overview,
-                            'popularity': item.get('popularity', 0.0)
+                            'tmdb_id': tmdb_id, 'title': title, 'media_type': media_type,
+                            'overview': overview, 'popularity': item.get('popularity', 0.0)
                         }
     
-    # Convert map values to a list and sort by popularity
-    final_prospects_list = sorted(list(all_prospects_map.values()), key=lambda x: x['popularity'], reverse=True)
+    if not all_prospects_map: # Fallback searches if no results yet
+        fallback_searches_br = {
+            "younger_kids": "animação infantil família dublado", # For younger kids in Brazil
+            "older_kids": "aventura juvenil live action família dublado"  # For older kids in Brazil
+        }
+        age = user_context['age']
+        chosen_fallback_key = "younger_kids" if age <= 7 else "older_kids"
+        if age > 12 : chosen_fallback_key = "older_kids" # Or another for teens
+
+        print(f"ℹ️ Buscas específicas não retornaram resultados. Tentando busca de fallback mais ampla: '{fallback_searches_br[chosen_fallback_key]}'")
+        search_params = {'query': fallback_searches_br[chosen_fallback_key], 'include_adult': 'false', 'language': TARGET_LANGUAGE_TMDB, 'region': user_context['country_code'], 'page': 1}
+        data = make_tmdb_request("/search/multi", params=search_params)
+        if data and 'results' in data:
+             for item in data['results']:
+                media_type = item.get('media_type')
+                if media_type in ['movie', 'tv']:
+                    title = item.get('title') if media_type == 'movie' else item.get('name')
+                    tmdb_id = item.get('id')
+                    overview = item.get('overview', '')
+                    if title and tmdb_id and len(overview) > 20 and tmdb_id not in all_prospects_map:
+                        all_prospects_map[tmdb_id] = {'tmdb_id': tmdb_id, 'title': title, 'media_type': media_type, 'overview': overview, 'popularity': item.get('popularity', 0.0)}
     
-    # Aim for up to 10 unique prospects
-    final_prospects_list = final_prospects_list[:10] 
+    final_prospects_list = sorted(list(all_prospects_map.values()), key=lambda x: x['popularity'], reverse=True)[:10]
 
     if final_prospects_list:
-        print(f"✅ Found {len(final_prospects_list)} unique prospects from TMDb after expanding interests (sorted by popularity).")
+        print(f"✅ Encontrados {len(final_prospects_list)} prospectos únicos no TMDb após expansão de interesses e possível fallback (ordenados por popularidade).")
     else:
-        print(f"⚠️ No initial prospects found on TMDb for the query/expanded terms: '{user_context['interests_query']}'. Try a different interest query or check for typos.")
-    
+        print(f"⚠️ Nenhum prospecto inicial encontrado no TMDb mesmo após tentar termos expandidos e fallbacks para a consulta: '{user_context['interests_query']}'.")
     return final_prospects_list
 
 def agent_detailed_enrichment(prospects_list, country_code_target):
-    """Agent 3: Enriches prospects with details like genres, TMDb rating, and country-specific age certification."""
-    print("\n--- 🧩 Agent 3: Detailed Enrichment (Fetching Details & Age Ratings) ---")
+    print("\n--- 🧩 Agente 3: Enriquecimento Detalhado (Buscando Detalhes e Classificação Etária) ---")
     if not TMDB_API_KEY or not prospects_list: return []
-
     enriched_prospects = []
     for prospect in prospects_list:
-        print(f"Enriching '{prospect['title']}' (ID: {prospect['tmdb_id']}, Type: {prospect['media_type']})...")
-        
+        print(f"Enriquecendo '{prospect['title']}' (ID: {prospect['tmdb_id']}, Tipo: {prospect['media_type']})...")
         endpoint = f"/{prospect['media_type']}/{prospect['tmdb_id']}"
         append_param = "release_dates" if prospect['media_type'] == 'movie' else "content_ratings"
-        
-        details = make_tmdb_request(endpoint, params={'append_to_response': append_param, 'language': 'en-US'})
-
+        details = make_tmdb_request(endpoint, params={'append_to_response': append_param, 'language': TARGET_LANGUAGE_TMDB}) # Using target language
         if not details:
-            print(f"  Skipping '{prospect['title']}' - failed to fetch details.")
+            print(f"  Pulando '{prospect['title']}' - falha ao buscar detalhes.")
             continue
-
         enriched_item = prospect.copy()
         enriched_item['genres'] = [genre['name'] for genre in details.get('genres', [])]
         enriched_item['tmdb_vote_average'] = details.get('vote_average', 0.0)
         enriched_item['tmdb_vote_count'] = details.get('vote_count', 0)
-        
-        age_certification_in_country = "N/A" 
+        age_certification_in_country = "N/A"
         if prospect['media_type'] == 'movie' and 'release_dates' in details:
             for release_region_info in details['release_dates'].get('results', []):
                 if release_region_info.get('iso_3166_1') == country_code_target:
                     if release_region_info.get('release_dates'):
                         for date_entry in release_region_info['release_dates']:
                             cert = date_entry.get('certification')
-                            # Consider theatrical (type 3), digital (type 4), physical (type 5), or TV (type 6) premiere
-                            if cert and cert.strip() and date_entry.get('type') in [3, 4, 5, 6]:
+                            if cert and cert.strip() and date_entry.get('type') in [3, 4, 5, 6]: # Theatrical, Digital, Physical, TV Premiere
                                 age_certification_in_country = cert.strip()
-                                break 
-                        if age_certification_in_country != "N/A": break 
+                                break
+                        if age_certification_in_country != "N/A": break
         elif prospect['media_type'] == 'tv' and 'content_ratings' in details:
             for rating_region_info in details['content_ratings'].get('results', []):
                 if rating_region_info.get('iso_3166_1') == country_code_target:
                     cert = rating_region_info.get('rating')
                     if cert and cert.strip():
                         age_certification_in_country = cert.strip()
-                        break 
-        
+                        break
         enriched_item['age_certification_country'] = age_certification_in_country
         enriched_prospects.append(enriched_item)
-        print(f"  -> Genres: {enriched_item['genres']}, TMDb Rating: {enriched_item['tmdb_vote_average']:.1f} ({enriched_item['tmdb_vote_count']} votes), Age Cert ({country_code_target}): {age_certification_in_country}")
-
-    print("✅ Enrichment process complete.")
+        print(f"  -> Gêneros: {enriched_item['genres']}, Nota TMDb: {enriched_item['tmdb_vote_average']:.1f} ({enriched_item['tmdb_vote_count']} votos), Class. Etária ({country_code_target}): {age_certification_in_country}")
+    print("✅ Processo de enriquecimento completo.")
     return enriched_prospects
 
 def agent_streaming_availability_verifier(enriched_prospects_list, user_context_details):
-    """Agent 4: Checks streaming availability on user's preferred platforms in their country."""
-    print("\n--- 📺 Agent 4: Streaming Availability Verifier ---")
+    print("\n--- 📺 Agente 4: Verificador de Disponibilidade em Streaming ---")
     if not TMDB_API_KEY or not enriched_prospects_list: return []
-
     target_country_code = user_context_details['country_code']
-    user_preferred_platform_names_clean = user_context_details['preferred_platform_names'] 
-    
-    target_provider_ids_map = {} 
+    user_preferred_platform_names_clean = user_context_details['preferred_platform_names']
+    target_provider_ids_map = {}
     for platform_name_clean in user_preferred_platform_names_clean:
         provider_id = get_tmdb_provider_id_from_name(platform_name_clean, watch_region=target_country_code)
         if provider_id:
-            target_provider_ids_map[platform_name_clean] = provider_id # Store mapping for clarity
-    
+            target_provider_ids_map[platform_name_clean] = provider_id
     if not target_provider_ids_map:
-        print(f"⚠️ Could not map any of your preferred platforms ({', '.join(user_preferred_platform_names_clean)}) to known TMDb provider IDs. Cannot check streaming accurately.")
-
-    print(f"Checking for availability on recognized platforms (IDs: {list(target_provider_ids_map.values())}) in {target_country_code}")
-
+        print(f"⚠️ Não foi possível mapear nenhuma das suas plataformas preferidas ({', '.join(user_preferred_platform_names_clean)}) para IDs conhecidos do TMDb. Não é possível verificar o streaming com precisão.")
+    print(f"Verificando disponibilidade nas plataformas reconhecidas (IDs: {list(target_provider_ids_map.values())}) em {target_country_code}")
     prospects_with_streaming_info = []
     for item in enriched_prospects_list:
-        print(f"Checking streaming for '{item['title']}'...")
+        print(f"Verificando streaming para '{item['title']}'...")
         item_copy = item.copy()
-        item_copy['available_on_user_platforms'] = [] 
-
+        item_copy['available_on_user_platforms'] = []
         providers_data = make_tmdb_request(f"/{item['media_type']}/{item['tmdb_id']}/watch/providers")
-        
         if providers_data and 'results' in providers_data and target_country_code in providers_data['results']:
             country_specific_providers = providers_data['results'][target_country_code]
-            
-            if 'flatrate' in country_specific_providers: # 'flatrate' for subscription
+            if 'flatrate' in country_specific_providers:
                 for tmdb_provider_info in country_specific_providers['flatrate']:
                     tmdb_provider_id = tmdb_provider_info.get('provider_id')
-                    tmdb_provider_name_from_api = tmdb_provider_info.get('provider_name') # Use name from API for display
-                    
+                    tmdb_provider_name_from_api = tmdb_provider_info.get('provider_name')
                     if tmdb_provider_id in target_provider_ids_map.values():
                         item_copy['available_on_user_platforms'].append(tmdb_provider_name_from_api)
-        
         if item_copy['available_on_user_platforms']:
             item_copy['available_on_user_platforms'] = sorted(list(set(item_copy['available_on_user_platforms'])))
-            print(f"  -> ✅ Available on: {', '.join(item_copy['available_on_user_platforms'])}")
+            print(f"  -> ✅ Disponível em: {', '.join(item_copy['available_on_user_platforms'])}")
         else:
-            print(f"  -> ℹ️ Not found on your preferred streaming services in {target_country_code} (or no mapping for your services).")
+            print(f"  -> ℹ️ Não encontrado nos seus serviços de streaming preferidos em {target_country_code} (ou sem mapeamento para seus serviços).")
         prospects_with_streaming_info.append(item_copy)
-
-    print("✅ Streaming availability check complete.")
+    print("✅ Verificação de disponibilidade em streaming completa.")
     return prospects_with_streaming_info
 
 def agent_recommendation_selector_and_justifier(fully_enriched_prospects, user_context_data):
-    """Agent 5: Filters to suitable & available items, selects top 1-2, and gets Gemini justification."""
-    print("\n--- ⭐ Agent 5: Recommendation Selector & Justifier ---")
+    print("\n--- ⭐ Agente 5: Seletor de Recomendações e Justificador ---")
     if not fully_enriched_prospects:
-        print("⚠️ No prospects available to select from.")
+        print("⚠️ Nenhum prospecto disponível para selecionar.")
         return []
-
     child_s_age = user_context_data['age']
-    target_country = user_context_data['country_code']
-    
+    target_country = user_context_data['country_code'] # Should be "BR"
     suitable_and_available_options = []
     for item in fully_enriched_prospects:
         if not item.get('available_on_user_platforms'):
             continue
-
         certification_str = item.get('age_certification_country', "N/A").upper()
         is_age_appropriate_for_child = False
-        
-        # Simplified Age Appropriateness Logic for POC
-        if certification_str == "N/A" or certification_str == "NOT RATED" or certification_str == "UNRATED":
-            is_age_appropriate_for_child = True # Assume parental discretion for unrated
+        # Simplified Age Appropriateness Logic for POC - focusing on BR
+        if certification_str == "N/A" or certification_str == "NOT RATED" or certification_str == "UNRATED" or certification_str == "":
+            is_age_appropriate_for_child = True # Assume parental discretion
         elif target_country == "BR": # Brazil - Classificação Indicativa
             if certification_str == "L" : is_age_appropriate_for_child = True
-            elif certification_str.startswith("AL") : is_age_appropriate_for_child = True # Alternative "Livre"
+            elif certification_str.startswith("AL") : is_age_appropriate_for_child = True
             elif certification_str == "10" and child_s_age >= 10: is_age_appropriate_for_child = True
             elif certification_str == "12" and child_s_age >= 12: is_age_appropriate_for_child = True
             elif certification_str == "14" and child_s_age >= 14: is_age_appropriate_for_child = True
             elif certification_str == "16" and child_s_age >= 16: is_age_appropriate_for_child = True
             elif certification_str == "18" and child_s_age >= 18: is_age_appropriate_for_child = True
-            else: is_age_appropriate_for_child = False # If rated but not matching, assume not appropriate
-        elif target_country == "US": # USA - MPAA and TV Parental Guidelines
-            if certification_str in ["G", "TV-Y", "TV-G"]: is_age_appropriate_for_child = True
-            elif certification_str == "PG": is_age_appropriate_for_child = True # Parental Guidance suggested, generally okay for many kids
-            elif certification_str == "TV-Y7": is_age_appropriate_for_child = child_s_age >= 7
-            elif certification_str == "TV-PG": is_age_appropriate_for_child = True # Parental Guidance suggested
-            elif certification_str == "PG-13" and child_s_age >= 13: is_age_appropriate_for_child = True
-            elif certification_str == "TV-14" and child_s_age >= 14: is_age_appropriate_for_child = True
-            else: is_age_appropriate_for_child = False
-        else: # Default for unhandled countries: assume appropriate if unrated, otherwise needs manual check (false for POC)
-            is_age_appropriate_for_child = certification_str == "N/A" # Only if unrated
-
+            else: is_age_appropriate_for_child = False # If rated but not matching and not L, assume not appropriate
+        else: # Fallback for other countries (though we hardcoded BR)
+            is_age_appropriate_for_child = certification_str == "N/A"
+        
         if not is_age_appropriate_for_child:
-            # print(f"ℹ️ Skipping '{item['title']}' (Cert: {certification_str} in {target_country}) - deemed not age-appropriate for {child_s_age} years old based on POC logic.")
             continue
-            
         suitable_and_available_options.append(item)
 
     if not suitable_and_available_options:
-        print("⚠️ No recommendations found that are both age-appropriate (based on simplified POC logic) and available on your platforms.")
+        print("⚠️ Nenhuma recomendação encontrada que seja apropriada para a idade (baseado na lógica simplificada da POC) e disponível em suas plataformas.")
         return []
-
-    recommendations_to_justify = sorted(suitable_and_available_options, key=lambda x: x.get('popularity', 0.0), reverse=True)[:2]
-
+    
+    recommendations_to_justify = sorted(suitable_and_available_options, key=lambda x: x.get('popularity', 0.0), reverse=True)[:2] # Top 2
     final_recommendations_with_text = []
-    if not gemini_model: 
-        print("⚠️ Gemini model not available. Skipping justifications.")
+
+    if not gemini_model:
+        print("⚠️ Modelo Gemini não disponível. Pulando justificativas.")
         for rec in recommendations_to_justify:
-             rec['gemini_justification'] = "Justification not available (Gemini API not configured)."
+             rec['gemini_justification'] = "Justificativa não disponível (API do Gemini não configurada)."
              final_recommendations_with_text.append(rec)
         return final_recommendations_with_text
 
     for rec_item in recommendations_to_justify:
-        print(f"🤖 Generating Gemini justification for '{rec_item['title']}'...")
+        print(f"🤖 Gerando justificativa com Gemini para '{rec_item['title']}'...")
         try:
-            platforms_str = ', '.join(rec_item['available_on_user_platforms']) if rec_item['available_on_user_platforms'] else "selected streaming services"
-            genres_str = ', '.join(rec_item['genres']) if rec_item['genres'] else "various interesting genres"
-
+            platforms_str = ', '.join(rec_item['available_on_user_platforms']) if rec_item['available_on_user_platforms'] else "serviços de streaming selecionados"
+            genres_str = ', '.join(rec_item['genres']) if rec_item['genres'] else "diversos gêneros interessantes"
             prompt_for_gemini = (
-                f"The user is a parent in {user_context_data['country_code']} looking for a {rec_item['media_type']} for their {user_context_data['age']}-year-old child. "
-                f"The child is interested in: '{user_context_data['interests_query']}'.\n"
-                f"Here's a movie/show option: '{rec_item['title']}'.\n"
-                f"Brief Synopsis: {rec_item['overview']}\n"
-                f"Genres: {genres_str}.\n"
-                f"TMDb User Rating: {rec_item['tmdb_vote_average']:.1f}/10 ({rec_item['tmdb_vote_count']} votes).\n"
-                f"The age certification in their country ({user_context_data['country_code']}) is '{rec_item['age_certification_country']}'.\n"
-                f"It's available on: {platforms_str}.\n\n"
-                f"Please write a short, friendly, and engaging paragraph (2-3 sentences) for the parent. "
-                f"Explain why '{rec_item['title']}' could be a great choice for their child's viewing today, considering their age and interests. "
-                f"Highlight a positive aspect (e.g., from genres, synopsis, or its general appeal). "
-                f"Subtly encourage them to watch it on one of the mentioned services. Sound enthusiastic and helpful. "
-                f"Do not repeat the synopsis verbatim. Keep it concise."
+                f"O usuário é um pai/mãe no Brasil (código do país: {user_context_data['country_code']}) procurando um(a) {rec_item['media_type']} para seu/sua filho(a) de {user_context_data['age']} anos. "
+                f"A criança está interessada em: '{user_context_data['interests_query']}'.\n"
+                f"Encontrei a seguinte opção: '{rec_item['title']}'.\n"
+                f"Sinopse breve: {rec_item['overview']}\n"
+                f"Gêneros: {genres_str}.\n"
+                f"Nota dos usuários no TMDb: {rec_item['tmdb_vote_average']:.1f}/10 ({rec_item['tmdb_vote_count']} votos).\n"
+                f"A classificação indicativa no Brasil ({user_context_data['country_code']}) é '{rec_item['age_certification_country']}'.\n"
+                f"Está disponível em: {platforms_str}.\n\n"
+                f"Por favor, escreva um parágrafo curto (2-3 frases), amigável e envolvente para o pai/mãe. "
+                f"Explique por que '{rec_item['title']}' poderia ser uma ótima escolha para a criança hoje, considerando sua idade e interesses. "
+                f"Destaque um ou dois aspectos positivos (ex: dos gêneros, temas da sinopse ou seu apelo geral). "
+                f"Sutilmente encoraje-os a assistir em um dos serviços mencionados. Soe entusiasmado e prestativo. "
+                f"Não repita a sinopse literalmente. Mantenha conciso."
             )
-            
             response = gemini_model.generate_content(prompt_for_gemini)
-            # Fallback if response or text is empty or an error structure from Gemini
             if hasattr(response, 'text') and response.text:
                 rec_item['gemini_justification'] = response.text.strip()
-            elif hasattr(response, 'parts') and response.parts: # Check if it's a multi-part response (less likely for text model)
+            elif hasattr(response, 'parts') and response.parts:
                 rec_item['gemini_justification'] = "".join(part.text for part in response.parts if hasattr(part, 'text')).strip()
-            else: # If response structure is unexpected or empty
-                print(f"⚠️ Gemini response for '{rec_item['title']}' was empty or in an unexpected format.")
-                rec_item['gemini_justification'] = f"'{rec_item['title']}' seems like a good option based on your criteria! You can find it on {platforms_str}." # Generic fallback
-        
+            else:
+                print(f"⚠️ Resposta do Gemini para '{rec_item['title']}' vazia ou em formato inesperado.")
+                rec_item['gemini_justification'] = f"'{rec_item['title']}' parece uma boa opção com base nos seus critérios! Você pode encontrá-lo em {platforms_str}."
         except Exception as e:
-            print(f"🔴 Error during Gemini justification for '{rec_item['title']}': {e}")
-            rec_item['gemini_justification'] = f"Could not generate a detailed justification due to an error, but '{rec_item['title']}' looks promising and is on {platforms_str}!"
+            print(f"🔴 Erro durante a justificativa com Gemini para '{rec_item['title']}': {e}")
+            rec_item['gemini_justification'] = f"Não foi possível gerar uma justificativa detalhada devido a um erro, mas '{rec_item['title']}' parece promissor e está em {platforms_str}!"
         final_recommendations_with_text.append(rec_item)
-
-    print("✅ Recommendations selected and justifications attempted.")
+    print("✅ Recomendações selecionadas e tentativas de justificativas completas.")
     return final_recommendations_with_text
 
 def agent_console_display_final(final_recommendations_list, original_user_context):
-    """Agent 6: Displays the final, justified recommendations to the user in the console."""
-    print("\n--- 🎬 Agent 6: Final Recommendations Display ---")
+    print("\n--- 🎬 Agente 6: Exibição Final das Recomendações ---")
     if not final_recommendations_list:
-        print("\n😢 I'm sorry, I couldn't find any recommendations that closely matched all your criteria this time. "
-              "You could try a slightly different interest query, check more streaming platforms, or a different age if appropriate.")
+        print("\n😢 Desculpe, não consegui encontrar recomendações que correspondessem perfeitamente a todos os seus critérios desta vez. "
+              "Talvez tente uma consulta de interesse um pouco diferente, verifique mais plataformas de streaming ou uma idade diferente, se apropriado.")
         return
-
-    print(f"\n✨ Here are some personalized suggestions for your {original_user_context['age']}-year-old, "
-          f"interested in '{original_user_context['interests_query']}', in {original_user_context['country_code']}: ✨")
-    
+    print(f"\n✨ Aqui estão algumas sugestões personalizadas para sua criança de {original_user_context['age']} anos, "
+          f"interessada em '{original_user_context['interests_query']}', no Brasil ({original_user_context['country_code']}): ✨")
     for i, rec in enumerate(final_recommendations_list):
-        print(f"\n--- Recommendation #{i+1} ---")
-        print(f"📺 Title: {rec['title']} ({rec['media_type'].upper()})")
-        print(f"⭐ TMDb Rating: {rec.get('tmdb_vote_average', 'N/A'):.1f}/10 ({rec.get('tmdb_vote_count', 0)} votes)")
-        print(f"🔞 Age Certification ({original_user_context['country_code']}): {rec.get('age_certification_country', 'N/A')}")
-        print(f"🎭 Genres: {', '.join(rec.get('genres', ['Not specified']))}")
-        print(f"📜 Overview: {rec.get('overview', 'No overview available.')}")
-        
+        print(f"\n--- Recomendação #{i+1} ---")
+        print(f"📺 Título: {rec['title']} ({rec['media_type'].upper()})")
+        print(f"⭐ Nota TMDb: {rec.get('tmdb_vote_average', 'N/A'):.1f}/10 ({rec.get('tmdb_vote_count', 0)} votos)")
+        print(f"🔞 Classificação Indicativa ({original_user_context['country_code']}): {rec.get('age_certification_country', 'N/A')}")
+        print(f"🎭 Gêneros: {', '.join(rec.get('genres', ['Não especificado']))}")
+        print(f"📜 Sinopse: {rec.get('overview', 'Sinopse não disponível.')}")
         if rec.get('available_on_user_platforms'):
-            print(f"💻 Available on your platforms: {', '.join(rec.get('available_on_user_platforms'))}")
+            print(f"💻 Disponível em suas plataformas: {', '.join(rec.get('available_on_user_platforms'))}")
         else:
-            print(f"💻 Availability on your preferred platforms: Not confirmed on your specified list.")
-            
-        print(f"\n💡 Why this could be a great pick:")
-        print(f"{rec.get('gemini_justification', 'No specific justification generated.')}")
-    
+            print(f"💻 Disponibilidade em suas plataformas preferidas: Não confirmado na sua lista especificada.")
+        print(f"\n💡 Por que esta pode ser uma ótima escolha:")
+        print(f"{rec.get('gemini_justification', 'Nenhuma justificativa específica gerada.')}")
     print("\n" + "="*50)
-    print("Remember to always use your own judgment and check content advisories when selecting for your child. Enjoy your movie time! 🎉")
+    print("Lembre-se de sempre usar seu próprio julgamento e verificar os avisos de conteúdo ao selecionar para sua criança. Aproveitem o filme/série! 🎉")
 
 # --- MAIN EXECUTION BLOCK ---
-
 if __name__ == "__main__":
-    print("🎬 Welcome to the Movie Picker POC (Python Backend)! 🎬")
-    
-    if not TMDB_API_KEY: 
-        print("\n🔴 CRITICAL: TMDB_API_KEY is missing. This application cannot function without it. Please set it in your .env file and restart.")
+    print("🎬 Bem-vindo à POC do Selecionador de Filmes (Backend Python)! 🎬")
+    if not TMDB_API_KEY:
+        print("\n🔴 CRÍTICO: TMDB_API_KEY está ausente. Esta aplicação depende fortemente do TMDb. Por favor, defina-a no seu arquivo .env e reinicie.")
     else:
-        # 1. Collect User Context
         user_context = agent_user_context_collector()
-        # print("\n[DEBUG] User Context:", json.dumps(user_context, indent=2))
-
-        # 2. Find Initial Prospects from TMDb
         initial_prospects = agent_content_prospector(user_context)
-        # print("\n[DEBUG] Initial Prospects:", json.dumps(initial_prospects, indent=2))
-
-        if initial_prospects: # Only proceed if we have some prospects
-            # 3. Enrich Prospects with Details (Age Ratings, etc.)
+        if initial_prospects:
             enriched_prospects = agent_detailed_enrichment(initial_prospects, user_context['country_code'])
-            # print("\n[DEBUG] Enriched Prospects:", json.dumps(enriched_prospects, indent=2))
-
-            # 4. Verify Streaming Availability on User's Platforms
             prospects_with_streaming = agent_streaming_availability_verifier(enriched_prospects, user_context)
-            # print("\n[DEBUG] Prospects with Streaming Info:", json.dumps(prospects_with_streaming, indent=2))
-            
-            # 5. Select Top Recommendations and Get Gemini Justification
             final_recommendations = agent_recommendation_selector_and_justifier(prospects_with_streaming, user_context)
-            # print("\n[DEBUG] Final Recommendations with Justification:", json.dumps(final_recommendations, indent=2))
-
-            # 6. Display Final Recommendations to User
             agent_console_display_final(final_recommendations, user_context)
         else:
-            print("\nNo initial movies or shows found based on your query. The subsequent agents will not run.")
-
-    print("\n👋 Movie Picker POC finished. Goodbye!")
+            print("\nNenhum filme ou série inicial encontrado com base na sua consulta. Os agentes subsequentes não serão executados.")
+    print("\n👋 POC do Selecionador de Filmes finalizada. Até logo!")
