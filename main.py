@@ -102,52 +102,93 @@ def agent_user_context_collector():
         "country_code": TARGET_COUNTRY_CODE # Hardcoded
     }
 
+def get_keyword_ids_from_tmdb(keyword_query_list):
+    """Busca IDs de palavras-chave no TMDb para uma lista de strings de consulta."""
+    if not TMDB_API_KEY: return []
+    keyword_ids = set() # Usar um set para evitar IDs duplicados
+    print(f"  -> Buscando IDs de palavras-chave no TMDb para: {keyword_query_list}")
+    for query in keyword_query_list:
+        if not query.strip(): continue
+        params = {'query': query.strip(), 'page': 1}
+        data = make_tmdb_request("/search/keyword", params=params)
+        if data and 'results' in data and data['results']:
+            # Pega o ID da primeira palavra-chave correspondente mais relevante
+            # Poderia pegar mais, mas para o POC, o primeiro é um bom começo.
+            for res in data['results'][:2]: # Pega os 2 primeiros resultados para ter mais chance
+                keyword_ids.add(res['id'])
+                print(f"    Encontrado ID de palavra-chave: {res['id']} para '{res['name']}' (de '{query}')")
+    return list(keyword_ids)
+
 def agent_content_prospector(user_context):
+    """Agente 2: Expande interesses com Gemini, busca IDs de palavras-chave e filmes/séries no TMDb."""
     print("\n--- 🔎 Agente 2: Investigador de Conteúdo (Expandindo Interesses & Buscando no TMDb) ---")
     if not TMDB_API_KEY: return []
 
     original_interest_query = user_context['interests_query']
-    search_terms_for_tmdb = {original_interest_query}
-
+    # Mantém a expansão de termos de busca com Gemini
+    search_terms_for_keywords = {original_interest_query}
     if gemini_model:
         print(f"🧠 Consultando o Gemini para expandir o interesse: '{original_interest_query}'...")
         try:
             prompt_for_gemini_expansion = (
-                f"Uma criança está interessada em '{original_interest_query}'. "
-                f"Sugira de 2 a 4 palavras-chave ou frases curtas, diversas mas relacionadas, para buscar filmes/séries adequados. "
-                f"Exemplos: se o interesse é 'animais engraçados', sugestões poderiam ser 'comédias com animais falantes, aventuras animadas com animais, filmes de família com pets'. "
-                f"Se o interesse é 'aventura espacial', sugestões poderiam ser 'filmes de ficção científica para crianças, desenhos de exploração da galáxia, filmes sobre encontros alienígenas para crianças'. "
-                f"Forneça apenas as palavras-chave/frases separadas por vírgula, sem numeração ou marcadores."
+                f"Uma criança no Brasil está interessada em '{original_interest_query}'. "
+                f"Sugira de 2 a 3 palavras-chave ou frases curtas, diversas mas relacionadas, que seriam boas para buscar filmes ou séries sobre esse tema no TMDb. "
+                f"Foque em termos que o TMDb provavelmente entenderia. Não inclua o termo original na sua resposta."
+                f"Forneça apenas as palavras-chave/frases separadas por vírgula."
             )
             response = gemini_model.generate_content(prompt_for_gemini_expansion)
             if hasattr(response, 'text') and response.text:
                 additional_terms = [term.strip() for term in response.text.split(',') if term.strip()]
                 if additional_terms:
-                    for term in additional_terms: search_terms_for_tmdb.add(term)
-                    print(f"💡 Gemini sugeriu termos de busca adicionais. Conjunto combinado: {search_terms_for_tmdb}")
+                    for term in additional_terms: search_terms_for_keywords.add(term)
+                    print(f"💡 Gemini sugeriu termos adicionais. Conjunto para buscar keywords: {search_terms_for_keywords}")
             else:
-                print("⚠️ Gemini não forneceu expansão utilizável, usando apenas a consulta original.")
+                print("⚠️ Gemini não forneceu expansão utilizável.")
         except Exception as e:
-            print(f"🔴 Erro durante a expansão de interesses com Gemini: {e}. Usando apenas a consulta original.")
-    else:
-        print("ℹ️ Modelo Gemini não disponível. Usando apenas a consulta de interesse original para busca no TMDb.")
-
+            print(f"🔴 Erro durante a expansão de interesses com Gemini: {e}.")
+    
+    # Busca IDs de palavras-chave no TMDb para os termos coletados
+    keyword_ids_to_use = get_keyword_ids_from_tmdb(list(search_terms_for_keywords))
+    
     all_prospects_map = {}
-    final_search_terms = list(search_terms_for_tmdb)[:4] # Limit to 4 search terms for API calls
-    if original_interest_query not in final_search_terms and len(final_search_terms) < 4:
-        final_search_terms.insert(0, original_interest_query)
-        final_search_terms = final_search_terms[:4]
-    elif original_interest_query not in final_search_terms and len(final_search_terms) >=4 :
-         final_search_terms[0] = original_interest_query
+    
+    # Estratégia 1: Usar /discover com IDs de palavras-chave (se encontrados)
+    if keyword_ids_to_use:
+        print(f"  -> Usando /discover do TMDb com IDs de palavras-chave: {keyword_ids_to_use}")
+        # TMDb permite 'OR' com pipe | e 'AND' com vírgula , para with_keywords
+        keyword_ids_str = '|'.join(map(str, keyword_ids_to_use)) # Usar OR para abranger mais
+        
+        for media_type_to_discover in ['movie', 'tv']:
+            print(f"    Buscando {media_type_to_discover} com keywords...")
+            discover_params = {
+                'with_keywords': keyword_ids_str,
+                'include_adult': 'false',
+                'language': TARGET_LANGUAGE_TMDB,
+                'region': user_context['country_code'],
+                'sort_by': 'popularity.desc', # Ordenar por popularidade
+                'page': 1
+            }
+            # Adicionar filtro de data de lançamento para pegar coisas não muito antigas, se desejado
+            # discover_params['primary_release_date.gte'] = '2000-01-01' # Exemplo
 
+            data = make_tmdb_request(f"/discover/{media_type_to_discover}", params=discover_params)
+            if data and 'results' in data:
+                for item in data['results']:
+                    title = item.get('title') if media_type_to_discover == 'movie' else item.get('name')
+                    tmdb_id = item.get('id')
+                    overview = item.get('overview', '')
+                    if title and tmdb_id and len(overview) > 20 and tmdb_id not in all_prospects_map:
+                        all_prospects_map[tmdb_id] = {
+                            'tmdb_id': tmdb_id, 'title': title, 'media_type': media_type_to_discover,
+                            'overview': overview, 'popularity': item.get('popularity', 0.0)
+                        }
 
-    print(f"Buscando no TMDb com até {len(final_search_terms)} termos: {final_search_terms} para o país '{user_context['country_code']}' (idioma: {TARGET_LANGUAGE_TMDB})...")
-
-    for term in final_search_terms:
-        if not term: continue
-        print(f"  -> Buscando no TMDb por: '{term}'")
+    # Estratégia 2: Fallback para /search/multi com o termo original se /discover não rendeu muito (ou como complemento)
+    # Se ainda temos poucos resultados, tentamos a busca por string original
+    if len(all_prospects_map) < 5 : # Se a busca por keyword rendeu poucos resultados
+        print(f"  -> Busca por keywords rendeu poucos resultados ({len(all_prospects_map)}). Tentando /search/multi com query original: '{original_interest_query}'")
         search_params = {
-            'query': term, 'include_adult': 'false',
+            'query': original_interest_query, 'include_adult': 'false',
             'language': TARGET_LANGUAGE_TMDB, 'region': user_context['country_code'], 'page': 1
         }
         data = make_tmdb_request("/search/multi", params=search_params)
@@ -163,17 +204,19 @@ def agent_content_prospector(user_context):
                             'tmdb_id': tmdb_id, 'title': title, 'media_type': media_type,
                             'overview': overview, 'popularity': item.get('popularity', 0.0)
                         }
-    
-    if not all_prospects_map: # Fallback searches if no results yet
+
+    # Estratégia 3: Fallback amplo se AINDA não houver resultados suficientes
+    if not all_prospects_map:
+        print("ℹ️ Buscas específicas não retornaram resultados. Tentando busca de fallback mais ampla...")
+        # (A lógica de fallback que você já tinha pode ser mantida ou adaptada aqui)
         fallback_searches_br = {
-            "younger_kids": "animação infantil família dublado", # For younger kids in Brazil
-            "older_kids": "aventura juvenil live action família dublado"  # For older kids in Brazil
+            "younger_kids": "animação infantil família aventura comédia dublado", 
+            "older_kids": "filme juvenil aventura fantasia família live action dublado"
         }
         age = user_context['age']
-        chosen_fallback_key = "younger_kids" if age <= 7 else "older_kids"
-        if age > 12 : chosen_fallback_key = "older_kids" # Or another for teens
-
-        print(f"ℹ️ Buscas específicas não retornaram resultados. Tentando busca de fallback mais ampla: '{fallback_searches_br[chosen_fallback_key]}'")
+        chosen_fallback_key = "younger_kids" if age <= 8 else "older_kids" # Ajustado o limite de idade
+        
+        print(f"  -> Buscando no TMDb por fallback: '{fallback_searches_br[chosen_fallback_key]}'")
         search_params = {'query': fallback_searches_br[chosen_fallback_key], 'include_adult': 'false', 'language': TARGET_LANGUAGE_TMDB, 'region': user_context['country_code'], 'page': 1}
         data = make_tmdb_request("/search/multi", params=search_params)
         if data and 'results' in data:
@@ -185,13 +228,13 @@ def agent_content_prospector(user_context):
                     overview = item.get('overview', '')
                     if title and tmdb_id and len(overview) > 20 and tmdb_id not in all_prospects_map:
                         all_prospects_map[tmdb_id] = {'tmdb_id': tmdb_id, 'title': title, 'media_type': media_type, 'overview': overview, 'popularity': item.get('popularity', 0.0)}
-    
+
     final_prospects_list = sorted(list(all_prospects_map.values()), key=lambda x: x['popularity'], reverse=True)[:10]
 
     if final_prospects_list:
-        print(f"✅ Encontrados {len(final_prospects_list)} prospectos únicos no TMDb após expansão de interesses e possível fallback (ordenados por popularidade).")
+        print(f"✅ Encontrados {len(final_prospects_list)} prospectos únicos no TMDb após todas as estratégias (ordenados por popularidade).")
     else:
-        print(f"⚠️ Nenhum prospecto inicial encontrado no TMDb mesmo após tentar termos expandidos e fallbacks para a consulta: '{user_context['interests_query']}'.")
+        print(f"⚠️ Nenhum prospecto inicial encontrado no TMDb para a consulta: '{user_context['interests_query']}'.")
     return final_prospects_list
 
 def agent_detailed_enrichment(prospects_list, country_code_target):
@@ -375,92 +418,77 @@ def agent_console_display_final(final_recommendations_list, original_user_contex
     print("\n" + "="*50)
     print("Lembre-se de sempre usar seu próprio julgamento e verificar os avisos de conteúdo ao selecionar para sua criança. Aproveitem o filme/série! 🎉")
 
-def agent_existence_verifier(recommendations_list, user_context_details):
-    """Agente Opcional: Verifica a existência do título recomendado usando a Pesquisa Google via Gemini."""
-    print("\n--- 🤔 Agente Extra: Verificador de Existência (Consultando Gemini com Pesquisa Google) ---")
+def agent_existence_verifier(recommendations_list, user_context_details): # Nome da função mantido em inglês
+    """Agente Opcional: Verifica a existência e relevância do título recomendado usando a Pesquisa Google via Gemini."""
+    print("\n--- 🤔 Agente Extra: Verificador de Existência e Relevância (Consultando Gemini com Pesquisa Google) ---")
     if not gemini_model or not recommendations_list:
-        if not gemini_model:
-            print("⚠️ Modelo Gemini não disponível. Pulando verificação de existência.")
-        return recommendations_list # Retorna a lista original se não puder verificar
+        if not gemini_model: print("⚠️ Modelo Gemini não disponível. Pulando verificação de existência.")
+        return recommendations_list 
 
     verified_recommendations = []
     for rec_item in recommendations_list:
         title_to_check = rec_item['title']
         media_type_to_check = rec_item['media_type']
         # Pega a primeira plataforma da lista, se houver, para a verificação opcional.
-        platform_to_check_mention = rec_item['available_on_user_platforms'][0] if rec_item['available_on_user_platforms'] else "qualquer plataforma de streaming"
+        platform_to_check_mention = rec_item['available_on_user_platforms'][0] if rec_item['available_on_user_platforms'] else "alguma plataforma de streaming" # Alterado para ser mais genérico se não houver plataforma específica
 
-        print(f"Verificando existência de '{title_to_check}' ({media_type_to_check})...")
+        print(f"Verificando '{title_to_check}' ({media_type_to_check})...")
         
         try:
-            # O Gemini 1.5 Flash/Pro com a API google-generativeai usa a Pesquisa Google implicitamente
-            # quando o prompt sugere a necessidade de informações externas ou verificação.
-            # Não é necessário configurar um "tool" explicitamente para busca simples aqui.
             prompt_for_verification = (
                 f"Com base em informações da Pesquisa Google, o {media_type_to_check} chamado '{title_to_check}' "
-                f"é um título real e conhecido? "
-                f"Adicionalmente, há alguma menção de que ele esteja ou esteve disponível em '{platform_to_check_mention}' no Brasil? "
-                f"Responda sobre a existência (SIM/NÃO/INCERTO). Se SIM, mencione brevemente sobre a plataforma se houver dados claros."
-                f"Exemplo de resposta: SIM. Há menções sobre a plataforma."
-                f"Outro exemplo: NÃO."
-                f"Outro exemplo: INCERTO."
+                f"é um título real e conhecido? Ele parece ser adequado para uma criança de {user_context_details['age']} anos interessada em '{user_context_details['interests_query']}'? "
+                f"Além disso, há alguma menção de que esteja disponível em '{platform_to_check_mention}' no Brasil? "
+                f"Responda sobre a existência (SIM/NÃO/INCERTO). Se SIM, comente brevemente sobre a adequação à idade/interesse e sobre a plataforma se houver dados claros."
+                f"Exemplo se existir e for adequado: SIM. Parece ser um {media_type_to_check} conhecido e adequado. Encontrado em {platform_to_check_mention}."
+                f"Exemplo se existir mas não adequado: SIM. Existe, mas pode não ser ideal para a idade/interesse."
+                f"Exemplo se não existir: NÃO. Não encontrei informações consistentes sobre este título."
             )
             
-            # Gerando conteúdo com o modelo Gemini.
-            # Para forçar o uso da busca ou ter mais controle, em cenários mais complexos,
-            # o uso explícito de 'tools=[Tool(Google Search_retrieval=Tool.GoogleSearchRetrieval())]'
-            # e especificando 'tool_config' poderia ser usado, mas para verificação simples,
-            # o modelo mais recente geralmente busca quando necessário.
-            # No entanto, para garantir, vamos usar a configuração de ferramentas se disponível e o modelo permitir.
-            
-            # NOTA: A forma de habilitar a Pesquisa Google explicitamente pode variar um pouco
-            # dependendo da exata versão da SDK e do modelo.
-            # Para gemini-1.5-flash-latest e SDK recente, o modelo é inteligente.
-            # Se precisar forçar, seria algo como:
-            # tools = [Tool(Google Search_retrieval=Tool.GoogleSearchRetrieval())]
-            # response = gemini_model.generate_content(prompt_for_verification, tools=tools)
-            # Por simplicidade e para o modelo atual, vamos confiar na busca implícita.
-
-            response = gemini_model.generate_content(prompt_for_verification) # Confia na busca implícita
+            response = gemini_model.generate_content(prompt_for_verification)
             
             verification_text = ""
             if hasattr(response, 'text') and response.text:
-                verification_text = response.text.strip().upper()
+                verification_text = response.text.strip() # Não colocar em UPPER para analisar melhor
             elif hasattr(response, 'parts') and response.parts:
-                verification_text = "".join(part.text for part in response.parts if hasattr(part, 'text')).strip().upper()
+                verification_text = "".join(part.text for part in response.parts if hasattr(part, 'text')).strip()
 
             print(f"  -> Resposta da verificação Gemini: '{verification_text}'")
 
-            # Lógica simples para interpretar a resposta do Gemini
-            # (Pode precisar de ajuste dependendo da consistência das respostas do Gemini)
-            if verification_text.startswith("SIM"):
-                print(f"  -> ✅ '{title_to_check}' parece existir.")
-                rec_item['existence_verified'] = True
-                if "PLATAFORMA" in verification_text or platform_to_check_mention.upper() in verification_text:
-                     rec_item['platform_mention_verified'] = True
-                     print(f"  -> ✅ Menção à plataforma '{platform_to_check_mention}' encontrada.")
+            # Lógica de interpretação mais branda
+            if "SIM" in verification_text.upper() or title_to_check.lower() in verification_text.lower(): # Procura por SIM ou o próprio título na resposta
+                if "NÃO SER IDEAL" in verification_text.upper() or "NÃO ADEQUADO" in verification_text.upper() or "NÃO RECOMENDADO PARA A IDADE" in verification_text.upper():
+                    print(f"  -> 🟡 '{title_to_check}' existe, mas Gemini indicou que pode não ser adequado. Removendo por precaução.")
                 else:
-                     rec_item['platform_mention_verified'] = False
-                verified_recommendations.append(rec_item)
-            elif verification_text.startswith("INCERTO"):
-                print(f"  -> ⚠️ Existência de '{title_to_check}' é INCERTA. Incluindo por precaução.")
-                rec_item['existence_verified'] = "INCERTO" # Marcar como incerto
-                verified_recommendations.append(rec_item) # Manter na lista por enquanto
-            else: # Assume NÃO ou qualquer outra resposta
-                print(f"  -> ❌ '{title_to_check}' parece NÃO existir ou a verificação não foi conclusiva. Removendo.")
-                # Não adiciona à lista verified_recommendations
+                    print(f"  -> ✅ '{title_to_check}' parece existir e/ou ser relevante.")
+                    rec_item['existence_verified_by_gemini'] = True
+                    # Se a plataforma foi mencionada positivamente
+                    if platform_to_check_mention.lower() in verification_text.lower() or "ENCONTRADO EM" in verification_text.upper() or "DISPONÍVEL EM" in verification_text.upper():
+                        rec_item['platform_mention_verified_by_gemini'] = True
+                        print(f"  -> ✅ Menção à plataforma '{platform_to_check_mention}' encontrada por Gemini.")
+                    verified_recommendations.append(rec_item)
+            elif "INCERTO" in verification_text.upper():
+                print(f"  -> ⚠️ Existência de '{title_to_check}' é INCERTA segundo Gemini. Mantendo por ora, mas requer atenção.")
+                rec_item['existence_verified_by_gemini'] = "INCERTO"
+                verified_recommendations.append(rec_item) 
+            else: # Assume NÃO ou não conclusivo
+                print(f"  -> ❌ '{title_to_check}' parece NÃO existir ou não foi confirmado pelo Gemini. Removendo.")
         
         except Exception as e:
             print(f"🔴 Erro durante a verificação de existência com Gemini para '{title_to_check}': {e}")
-            print(f"  -> ⚠️ Não foi possível verificar '{title_to_check}'. Mantendo na lista por precaução.")
-            rec_item['existence_verified'] = "ERRO_NA_VERIFICACAO"
-            verified_recommendations.append(rec_item) # Mantém na lista se a verificação falhar
+            rec_item['existence_verified_by_gemini'] = "ERRO_NA_VERIFICACAO"
+            verified_recommendations.append(rec_item) # Mantém se a verificação falhar, mas com flag
 
-    if not verified_recommendations and recommendations_list:
-        print("⚠️ Nenhuma recomendação pôde ser verificada com confiança, ou todas foram consideradas não existentes. Retornando a lista original com ressalvas.")
-        return recommendations_list # Ou uma lista vazia se preferir ser mais estrito
+    if not verified_recommendations and recommendations_list: # Se a lista ficou vazia mas havia recomendações antes
+        print("⚠️ Nenhuma recomendação pôde ser verificada com confiança pelo Gemini, ou todas foram consideradas não existentes/adequadas. "
+              "Verifique as recomendações originais do TMDb com cautela.")
+        # Retorna a lista original que veio do TMDb se o verificador esvaziou tudo
+        # Adiciona uma flag para o usuário saber que não foi verificada por Gemini
+        for rec in recommendations_list:
+            rec['existence_verified_by_gemini'] = "NÃO_VERIFICADO_GEMINI_FALHOU_EM_TODOS"
+        return recommendations_list
         
-    print("✅ Verificação de existência completa.")
+    print("✅ Verificação de existência e relevância completa.")
     return verified_recommendations
 
 # --- MAIN EXECUTION BLOCK ---
