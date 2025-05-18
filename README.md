@@ -95,6 +95,7 @@ Para executar este projeto em seu computador, você precisará seguir alguns pas
         ```env
         GEMINI_API_KEY="COLE_SUA_CHAVE_API_DO_GOOGLE_AI_STUDIO_AQUI"
         TMDB_API_KEY="COLE_SUA_CHAVE_API_DO_TMDB_V3_AQUI"
+        GEMINI_MODEL_ID="gemini-1.5-flash-latest" # Opcional: Modelo Gemini a ser usado (ex: 'gemini-1.5-flash-latest' ou 'gemini-pro')
         ```
     * **Como obter a Chave de API do Google AI Studio (Gemini):**
         1.  Vá para [Google AI Studio (anteriormente MakerSuite)](https://makersuite.google.com/).

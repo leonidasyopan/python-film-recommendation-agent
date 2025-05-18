@@ -98,6 +98,7 @@ To run this project on your computer, you'll need to follow a few steps. Don't w
         ```env
         GEMINI_API_KEY="PASTE_YOUR_GOOGLE_AI_STUDIO_API_KEY_HERE"
         TMDB_API_KEY="PASTE_YOUR_TMDB_API_KEY_V3_HERE"
+        GEMINI_MODEL_ID="gemini-1.5-flash-latest" # Optional: Gemini Model ID to use (e.g., 'gemini-1.5-flash-latest' or 'gemini-pro')
         ```
     * **How to get the Google AI Studio (Gemini) API Key:**
         1.  Go to [Google AI Studio (formerly MakerSuite)](https://makersuite.google.com/).

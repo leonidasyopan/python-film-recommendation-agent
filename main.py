@@ -8,17 +8,20 @@ import json
 load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 TMDB_API_KEY = os.getenv("TMDB_API_KEY")
+# Nova linha para carregar o ID do modelo Gemini do .env
+GEMINI_MODEL_ID_FROM_ENV = os.getenv("GEMINI_MODEL_ID", 'gemini-1.5-flash-latest') # Define um fallback
 
 gemini_model = None
 if GEMINI_API_KEY:
     try:
         genai.configure(api_key=GEMINI_API_KEY)
-        gemini_model = genai.GenerativeModel('gemini-1.5-flash-latest')
-        print("✅ API do Gemini configurada com sucesso.") # User-facing: Portuguese
+        # Usa a variável carregada do .env (ou o fallback)
+        gemini_model = genai.GenerativeModel(GEMINI_MODEL_ID_FROM_ENV) 
+        print(f"✅ API do Gemini configurada com sucesso usando o modelo: {GEMINI_MODEL_ID_FROM_ENV}.") # User-facing: Portuguese
     except Exception as e:
-        print(f"🔴 Erro ao configurar a API do Gemini: {e}. Funcionalidades do Gemini serão puladas.") # User-facing: Portuguese
+        print(f"🔴 Erro ao configurar a API do Gemini com o modelo '{GEMINI_MODEL_ID_FROM_ENV}': {e}. Funcionalidades do Gemini serão puladas.") # User-facing: Portuguese
 else:
-    print("⚠️ GEMINI_API_KEY não encontrada no arquivo .env. Funcionalidades do Gemini serão puladas.") # User-facing: Portuguese
+    print("⚠️  GEMINI_API_KEY não encontrada no arquivo .env. Funcionalidades do Gemini serão puladas.") # User-facing: Portuguese
 
 if not TMDB_API_KEY:
     print("🔴 TMDB_API_KEY não encontrada no arquivo .env. Funcionalidades do TMDb não funcionarão. Por favor, configure-a e reinicie.") # User-facing: Portuguese
