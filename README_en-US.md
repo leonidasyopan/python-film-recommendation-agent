@@ -1,6 +1,3 @@
-**README\_en-US.md (English Version - Translation of the above)**
-
-````markdown
 [English Version](README_en-US.md) | [Versão em Português (Brasil)](README_pt-BR.md)
 ---
 
@@ -140,8 +137,8 @@ movie\_picker\_poc/
 ├── .gitignore               \# Specifies files and folders Git should ignore
 ├── main.py                  \# The main Python script for the application
 ├── requirements.txt         \# Lists Python package dependencies
-├── README.md                \# This information file in English
-└── README\_pt-BR.md          \# The README file in Brazilian Portuguese
+├── README\_en-US-BR.md      \# This information file in English
+└── README.md                \# The README file in Brazilian Portuguese
 
 ```
 

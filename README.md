@@ -137,8 +137,8 @@ selecionador\_filmes\_poc/
 ├── .gitignore               \# Especifica arquivos e pastas que o Git deve ignorar
 ├── main.py                  \# O script principal da aplicação em Python
 ├── requirements.txt         \# Lista as bibliotecas Python que o projeto precisa
-├── README.md                \# Arquivo de informações em Inglês
-└── README\_pt-BR.md          \# Este arquivo, em Português do Brasil
+├── README\_en-US-BR.md      \# Arquivo de informações em Inglês
+└── README.md                \# Este arquivo, em Português do Brasil
 
 ```
 
