@@ -128,7 +128,7 @@ Para executar este projeto em seu computador, você precisará seguir alguns pas
 
 ## 📂 Estrutura de Arquivos do Projeto
 
-````
+```
 
 selecionador\_filmes\_poc/
 ├── .venv/                   \# Pasta do ambiente virtual Python (geralmente ignorada pelo Git)

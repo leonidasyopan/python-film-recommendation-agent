@@ -131,7 +131,7 @@ To run this project on your computer, you'll need to follow a few steps. Don't w
 
 ## 📂 Project File Structure
 
-````
+```
 
 movie\_picker\_poc/
 ├── .venv/                   \# Python virtual environment folder (usually ignored by Git)
