@@ -120,16 +120,23 @@ def get_keyword_ids_from_tmdb(keyword_query_list):
     return list(keyword_ids)
 
 def agent_content_prospector(user_context):
-    """Agente 2: Expande interesses com Gemini, busca IDs de palavras-chave e filmes/séries no TMDb."""
-    print("\n--- 🔎 Agente 2: Investigador de Conteúdo (Expandindo Interesses & Buscando no TMDb) ---")
+    """Agente 2: Busca conteúdo no TMDb usando múltiplas estratégias para garantir resultados."""
+    print("\n--- 🔎 Agente 2: Investigador de Conteúdo (Estratégias Múltiplas no TMDb) ---")
     if not TMDB_API_KEY: return []
 
     original_interest_query = user_context['interests_query']
-    # Mantém a expansão de termos de busca com Gemini
+    child_age = user_context['age']
+    country_code = user_context['country_code']
+    
+    all_prospects_map = {} # Usar um dicionário para prospectos únicos por ID
+
+    # --- Estratégia 1: Expansão de Interesses com Gemini e Busca por Palavras-chave no TMDb /discover ---
+    print("ETAPA 1: Tentando busca por palavras-chave (Keywords) com expansão do Gemini...")
     search_terms_for_keywords = {original_interest_query}
     if gemini_model:
         print(f"🧠 Consultando o Gemini para expandir o interesse: '{original_interest_query}'...")
         try:
+            # (Mesma lógica de expansão com Gemini que você tinha antes)
             prompt_for_gemini_expansion = (
                 f"Uma criança no Brasil está interessada em '{original_interest_query}'. "
                 f"Sugira de 2 a 3 palavras-chave ou frases curtas, diversas mas relacionadas, que seriam boas para buscar filmes ou séries sobre esse tema no TMDb. "
@@ -142,99 +149,111 @@ def agent_content_prospector(user_context):
                 if additional_terms:
                     for term in additional_terms: search_terms_for_keywords.add(term)
                     print(f"💡 Gemini sugeriu termos adicionais. Conjunto para buscar keywords: {search_terms_for_keywords}")
-            else:
-                print("⚠️ Gemini não forneceu expansão utilizável.")
-        except Exception as e:
-            print(f"🔴 Erro durante a expansão de interesses com Gemini: {e}.")
+            else: print("⚠️ Gemini não forneceu expansão utilizável.")
+        except Exception as e: print(f"🔴 Erro durante a expansão de interesses com Gemini: {e}.")
     
-    # Busca IDs de palavras-chave no TMDb para os termos coletados
     keyword_ids_to_use = get_keyword_ids_from_tmdb(list(search_terms_for_keywords))
     
-    all_prospects_map = {}
-    
-    # Estratégia 1: Usar /discover com IDs de palavras-chave (se encontrados)
     if keyword_ids_to_use:
         print(f"  -> Usando /discover do TMDb com IDs de palavras-chave: {keyword_ids_to_use}")
-        # TMDb permite 'OR' com pipe | e 'AND' com vírgula , para with_keywords
-        keyword_ids_str = '|'.join(map(str, keyword_ids_to_use)) # Usar OR para abranger mais
+        keyword_ids_str = '|'.join(map(str, keyword_ids_to_use)) 
         
         for media_type_to_discover in ['movie', 'tv']:
-            print(f"    Buscando {media_type_to_discover} com keywords...")
+            # print(f"    Buscando {media_type_to_discover} com keywords...") # Menos verboso
             discover_params = {
-                'with_keywords': keyword_ids_str,
-                'include_adult': 'false',
-                'language': TARGET_LANGUAGE_TMDB,
-                'region': user_context['country_code'],
-                'sort_by': 'popularity.desc', # Ordenar por popularidade
-                'page': 1
+                'with_keywords': keyword_ids_str, 'include_adult': 'false',
+                'language': TARGET_LANGUAGE_TMDB, 'region': country_code,
+                'sort_by': 'popularity.desc', 'page': 1
             }
-            # Adicionar filtro de data de lançamento para pegar coisas não muito antigas, se desejado
-            # discover_params['primary_release_date.gte'] = '2000-01-01' # Exemplo
-
             data = make_tmdb_request(f"/discover/{media_type_to_discover}", params=discover_params)
             if data and 'results' in data:
                 for item in data['results']:
                     title = item.get('title') if media_type_to_discover == 'movie' else item.get('name')
                     tmdb_id = item.get('id')
                     overview = item.get('overview', '')
-                    if title and tmdb_id and len(overview) > 20 and tmdb_id not in all_prospects_map:
+                    if title and tmdb_id and len(overview) > 10 and tmdb_id not in all_prospects_map: # Overview > 10
                         all_prospects_map[tmdb_id] = {
                             'tmdb_id': tmdb_id, 'title': title, 'media_type': media_type_to_discover,
                             'overview': overview, 'popularity': item.get('popularity', 0.0)
                         }
+    else:
+        print("  -> Nenhum ID de palavra-chave encontrado ou usado para a busca /discover.")
 
-    # Estratégia 2: Fallback para /search/multi com o termo original se /discover não rendeu muito (ou como complemento)
-    # Se ainda temos poucos resultados, tentamos a busca por string original
-    if len(all_prospects_map) < 5 : # Se a busca por keyword rendeu poucos resultados
-        print(f"  -> Busca por keywords rendeu poucos resultados ({len(all_prospects_map)}). Tentando /search/multi com query original: '{original_interest_query}'")
-        search_params = {
-            'query': original_interest_query, 'include_adult': 'false',
-            'language': TARGET_LANGUAGE_TMDB, 'region': user_context['country_code'], 'page': 1
-        }
-        data = make_tmdb_request("/search/multi", params=search_params)
-        if data and 'results' in data:
-            for item in data['results']:
-                media_type = item.get('media_type')
-                if media_type in ['movie', 'tv']:
-                    title = item.get('title') if media_type == 'movie' else item.get('name')
-                    tmdb_id = item.get('id')
-                    overview = item.get('overview', '')
-                    if title and tmdb_id and len(overview) > 20 and tmdb_id not in all_prospects_map:
-                        all_prospects_map[tmdb_id] = {
-                            'tmdb_id': tmdb_id, 'title': title, 'media_type': media_type,
-                            'overview': overview, 'popularity': item.get('popularity', 0.0)
-                        }
-
-    # Estratégia 3: Fallback amplo se AINDA não houver resultados suficientes
-    if not all_prospects_map:
-        print("ℹ️ Buscas específicas não retornaram resultados. Tentando busca de fallback mais ampla...")
-        # (A lógica de fallback que você já tinha pode ser mantida ou adaptada aqui)
-        fallback_searches_br = {
-            "younger_kids": "animação infantil família aventura comédia dublado", 
-            "older_kids": "filme juvenil aventura fantasia família live action dublado"
-        }
-        age = user_context['age']
-        chosen_fallback_key = "younger_kids" if age <= 8 else "older_kids" # Ajustado o limite de idade
+    # --- Estratégia 2: Busca por String Direta no TMDb /search/multi ---
+    # Executar se a Estratégia 1 rendeu poucos resultados (ex: menos de 5)
+    if len(all_prospects_map) < 5:
+        print(f"\nETAPA 2: Busca por keywords rendeu {len(all_prospects_map)} resultados. Tentando /search/multi com termos originais/expandidos...")
+        search_terms_list = list(search_terms_for_keywords)[:3] # Limitar a 3 termos de busca por string
+        for term in search_terms_list:
+            if not term: continue
+            print(f"  -> Buscando no TMDb /search/multi por: '{term}'")
+            search_params = {
+                'query': term, 'include_adult': 'false',
+                'language': TARGET_LANGUAGE_TMDB, 'region': country_code, 'page': 1
+            }
+            data = make_tmdb_request("/search/multi", params=search_params)
+            if data and 'results' in data:
+                for item in data['results']:
+                    media_type = item.get('media_type')
+                    if media_type in ['movie', 'tv']:
+                        title = item.get('title') if media_type == 'movie' else item.get('name')
+                        tmdb_id = item.get('id')
+                        overview = item.get('overview', '')
+                        if title and tmdb_id and len(overview) > 10 and tmdb_id not in all_prospects_map:
+                            all_prospects_map[tmdb_id] = {
+                                'tmdb_id': tmdb_id, 'title': title, 'media_type': media_type,
+                                'overview': overview, 'popularity': item.get('popularity', 0.0)
+                            }
+    
+    # --- Estratégia 3: Busca por Gêneros Populares para a Idade (Fallback Mais Genérico) ---
+    # Executar se as estratégias anteriores ainda renderam poucos resultados (ex: menos de 3)
+    if len(all_prospects_map) < 3:
+        print(f"\nETAPA 3: Buscas anteriores renderam {len(all_prospects_map)} resultados. Tentando /discover por gêneros populares para a idade...")
         
-        print(f"  -> Buscando no TMDb por fallback: '{fallback_searches_br[chosen_fallback_key]}'")
-        search_params = {'query': fallback_searches_br[chosen_fallback_key], 'include_adult': 'false', 'language': TARGET_LANGUAGE_TMDB, 'region': user_context['country_code'], 'page': 1}
-        data = make_tmdb_request("/search/multi", params=search_params)
-        if data and 'results' in data:
-             for item in data['results']:
-                media_type = item.get('media_type')
-                if media_type in ['movie', 'tv']:
-                    title = item.get('title') if media_type == 'movie' else item.get('name')
-                    tmdb_id = item.get('id')
-                    overview = item.get('overview', '')
-                    if title and tmdb_id and len(overview) > 20 and tmdb_id not in all_prospects_map:
-                        all_prospects_map[tmdb_id] = {'tmdb_id': tmdb_id, 'title': title, 'media_type': media_type, 'overview': overview, 'popularity': item.get('popularity', 0.0)}
+        genre_ids_for_fallback = []
+        if child_age <= 7:
+            genre_ids_for_fallback = [16, 10751]  # Animação, Família
+        elif child_age <= 12:
+            genre_ids_for_fallback = [10751, 12, 16, 35] # Família, Aventura, Animação, Comédia
+        else: # Adolescentes
+            genre_ids_for_fallback = [12, 14, 878, 35] # Aventura, Fantasia, Ficção Científica, Comédia
+
+        if genre_ids_for_fallback:
+            genre_ids_str = '|'.join(map(str, genre_ids_for_fallback)) # OR entre os gêneros
+            print(f"  -> Usando /discover do TMDb com IDs de GÊNERO (fallback): {genre_ids_str}")
+            for media_type_to_discover in ['movie', 'tv']:
+                # print(f"    Buscando {media_type_to_discover} com gêneros de fallback...") # Menos verboso
+                discover_params = {
+                    'with_genres': genre_ids_str, 'include_adult': 'false',
+                    'language': TARGET_LANGUAGE_TMDB, 'region': country_code,
+                    'sort_by': 'popularity.desc', 
+                    'vote_count.gte': 50, # Tentar pegar filmes/séries com um mínimo de votos
+                    'page': 1
+                }
+                # Adicionar filtro de certificação etária aqui se tivermos uma lista confiável para BR
+                # Ex: discover_params['certification_country'] = 'BR'
+                # Ex: discover_params['certification.lte'] = '10' (se a criança tiver 10 anos e '10' for uma classificação válida)
+
+                data = make_tmdb_request(f"/discover/{media_type_to_discover}", params=discover_params)
+                if data and 'results' in data:
+                    for item in data['results']:
+                        title = item.get('title') if media_type_to_discover == 'movie' else item.get('name')
+                        tmdb_id = item.get('id')
+                        overview = item.get('overview', '')
+                        if title and tmdb_id and len(overview) > 10 and tmdb_id not in all_prospects_map:
+                            all_prospects_map[tmdb_id] = {
+                                'tmdb_id': tmdb_id, 'title': title, 'media_type': media_type_to_discover,
+                                'overview': overview, 'popularity': item.get('popularity', 0.0)
+                            }
+        else:
+            print("  -> Nenhum gênero de fallback definido para esta faixa etária.")
 
     final_prospects_list = sorted(list(all_prospects_map.values()), key=lambda x: x['popularity'], reverse=True)[:10]
 
     if final_prospects_list:
         print(f"✅ Encontrados {len(final_prospects_list)} prospectos únicos no TMDb após todas as estratégias (ordenados por popularidade).")
     else:
-        print(f"⚠️ Nenhum prospecto inicial encontrado no TMDb para a consulta: '{user_context['interests_query']}'.")
+        print(f"⚠️ Nenhum prospecto inicial encontrado no TMDb para a consulta: '{user_context['interests_query']}' mesmo após todas as tentativas.")
     return final_prospects_list
 
 def agent_detailed_enrichment(prospects_list, country_code_target):
