@@ -3,6 +3,7 @@ import requests
 import google.generativeai as genai
 from dotenv import load_dotenv
 import json
+import unicodedata # Adicione esta linha
 
 # --- CONFIGURATION ---
 load_dotenv()
@@ -77,20 +78,20 @@ def get_tmdb_provider_id_from_name(provider_name_input, watch_region="BR"):
     }
     return common_provider_map.get(provider_name_lower)
 
-def get_keyword_ids_from_tmdb(keyword_query_list):
-    # Fetches keyword IDs from TMDb for a list of query strings.
-    if not TMDB_API_KEY: return []
-    keyword_ids = set() 
-    # print(f"  -> Buscando IDs de palavras-chave no TMDb para: {keyword_query_list}") # Debug, can be enabled
-    for query in keyword_query_list:
-        if not query.strip(): continue
-        params = {'query': query.strip(), 'page': 1}
-        data = make_tmdb_request("/search/keyword", params=params)
-        if data and 'results' in data and data['results']:
-            for res in data['results'][:2]: # Take top 2 relevant keyword IDs for this query term
-                keyword_ids.add(res['id'])
-                # print(f"    Encontrado ID de palavra-chave: {res['id']} para '{res['name']}' (de '{query}')") # Debug
-    return list(keyword_ids)
+# def get_keyword_ids_from_tmdb(keyword_query_list):
+#     # Fetches keyword IDs from TMDb for a list of query strings.
+#     if not TMDB_API_KEY: return []
+#     keyword_ids = set() 
+#     # print(f"  -> Buscando IDs de palavras-chave no TMDb para: {keyword_query_list}") # Debug, can be enabled
+#     for query in keyword_query_list:
+#         if not query.strip(): continue
+#         params = {'query': query.strip(), 'page': 1}
+#         data = make_tmdb_request("/search/keyword", params=params)
+#         if data and 'results' in data and data['results']:
+#             for res in data['results'][:2]: # Take top 2 relevant keyword IDs for this query term
+#                 keyword_ids.add(res['id'])
+#                 # print(f"    Encontrado ID de palavra-chave: {res['id']} para '{res['name']}' (de '{query}')") # Debug
+#     return list(keyword_ids)
 
 # --- AGENT FUNCTION DEFINITIONS ---
 
@@ -109,6 +110,9 @@ def agent_user_context_collector():
     if not interests_query.strip():
         print("ℹ️  Nenhum interesse específico fornecido. Buscando por conteúdo popular infantil.") # User-facing: Portuguese
         interests_query = "filmes infantis populares animação família" # Default fallback
+    else:
+        # Normaliza a string para tentar corrigir problemas de codificação com caracteres especiais
+        interests_query = unicodedata.normalize('NFC', interests_query)
 
     platforms_input_str = input("➡️  Digite as plataformas de streaming preferidas, separadas por vírgula (ex: 'Netflix, Disney Plus, Globoplay'): ") # User-facing: Portuguese
     preferred_platform_names_cleaned = [p.strip().lower() for p in platforms_input_str.split(',') if p.strip()]
@@ -122,7 +126,7 @@ def agent_user_context_collector():
     }
 
 def agent_content_prospector(user_context):
-    # Agent 2: Finds content on TMDb using multiple strategies to ensure results.
+    """Agente 2: Expande interesses com Gemini e busca conteúdo no TMDb com múltiplas estratégias."""
     print("\n--- 🔎 Agente 2: Investigador de Conteúdo (Estratégias Múltiplas no TMDb) ---") # User-facing: Portuguese
     if not TMDB_API_KEY: return []
 
@@ -130,64 +134,65 @@ def agent_content_prospector(user_context):
     child_age = user_context['age']
     country_code = user_context['country_code']
     
-    all_prospects_map = {} 
+    all_prospects_map = {} # Use a dictionary for unique prospects by ID
 
-    # --- Strategy 1: Keyword-based search using Gemini expansion and TMDb /discover ---
-    print("ETAPA 1: Tentando busca por palavras-chave (Keywords) com expansão do Gemini...") # User-facing: Portuguese
-    search_terms_for_keywords = {original_interest_query}
+    # ETAPA 1: Expansão de Interesses com Gemini para obter termos de busca e possíveis gêneros
+    print(f"🧠 Consultando o Gemini para expandir e categorizar o interesse: '{original_interest_query}'...") # User-facing: Portuguese
+    search_terms_from_gemini = {original_interest_query} # Start with the original
+    genre_hints_from_gemini = []
+
     if gemini_model:
-        print(f"🧠 Consultando o Gemini para expandir o interesse: '{original_interest_query}'...") # User-facing: Portuguese
         try:
-            prompt_for_gemini_expansion = (
-                f"Uma criança no Brasil está interessada em '{original_interest_query}'. "
-                f"Sugira de 2 a 3 palavras-chave ou frases curtas, diversas mas relacionadas, que seriam boas para buscar filmes ou séries sobre esse tema no TMDb. "
-                f"Foque em termos que o TMDb provavelmente entenderia. Não inclua o termo original na sua resposta."
-                f"Forneça apenas as palavras-chave/frases separadas por vírgula."
+            prompt_for_gemini_analysis = (
+                f"Uma criança no Brasil está interessada em '{original_interest_query}'.\n"
+                f"1. Sugira de 2 a 4 frases ou palavras-chave alternativas e diversas para buscar filmes/séries sobre este tema no TMDb. Não inclua a frase original.\n"
+                f"2. Quais seriam os 2 ou 3 principais IDs de gênero do TMDb (ex: Animação=16, Aventura=12, Ficção científica=878, Família=10751, Comédia=35, Drama=18, Fantasia=14) que melhor se encaixam nesse interesse? Se não tiver certeza, não sugira IDs.\n"
+                f"Formato da resposta esperada:\n"
+                f"TERMOS: termo1, termo2, termo3\n"
+                f"GENEROS_IDS: 16, 10751"
             ) # Prompt for Gemini: Portuguese
-            response = gemini_model.generate_content(prompt_for_gemini_expansion)
-            if hasattr(response, 'text') and response.text:
-                additional_terms = [term.strip() for term in response.text.split(',') if term.strip()]
-                if additional_terms:
-                    for term in additional_terms: search_terms_for_keywords.add(term)
-                    print(f"💡 Gemini sugeriu termos adicionais. Conjunto para buscar keywords: {search_terms_for_keywords}") # User-facing: Portuguese
-            else: print("⚠️  Gemini não forneceu expansão utilizável.") # User-facing: Portuguese
-        except Exception as e: print(f"🔴 Erro durante a expansão de interesses com Gemini: {e}.") # User-facing: Portuguese
-    
-    keyword_ids_to_use = get_keyword_ids_from_tmdb(list(search_terms_for_keywords))
-    
-    if keyword_ids_to_use:
-        # print(f"  -> Usando /discover do TMDb com IDs de palavras-chave: {keyword_ids_to_use}") # Debug
-        keyword_ids_str = '|'.join(map(str, keyword_ids_to_use)) 
-        for media_type_to_discover in ['movie', 'tv']:
-            discover_params = {
-                'with_keywords': keyword_ids_str, 'include_adult': 'false',
-                'language': TARGET_LANGUAGE_TMDB, 'region': country_code,
-                'sort_by': 'popularity.desc', 'page': 1
-            }
-            data = make_tmdb_request(f"/discover/{media_type_to_discover}", params=discover_params)
-            if data and 'results' in data:
-                for item in data['results']:
-                    title = item.get('title') if media_type_to_discover == 'movie' else item.get('name')
-                    tmdb_id = item.get('id')
-                    overview = item.get('overview', '')
-                    if title and tmdb_id and len(overview) > 10 and tmdb_id not in all_prospects_map:
-                        all_prospects_map[tmdb_id] = {
-                            'tmdb_id': tmdb_id, 'title': title, 'media_type': media_type_to_discover,
-                            'overview': overview, 'popularity': item.get('popularity', 0.0)
-                        }
-    # else: # Commented out for less verbose output
-        # print("  -> Nenhum ID de palavra-chave encontrado ou usado para a busca /discover.") # User-facing: Portuguese (can be reactivated for debug)
+            response = gemini_model.generate_content(prompt_for_gemini_analysis)
 
-    # --- Strategy 2: Direct string search on TMDb /search/multi ---
-    if len(all_prospects_map) < 5: # If keyword search yielded few results
-        print(f"\nETAPA 2: Busca por keywords rendeu {len(all_prospects_map)} resultados. Tentando /search/multi com termos originais/expandidos...") # User-facing: Portuguese
-        search_terms_list = list(search_terms_for_keywords)[:3] 
-        for term in search_terms_list:
-            if not term: continue
-            # print(f"  -> Buscando no TMDb /search/multi por: '{term}'") # Debug
+            if hasattr(response, 'text') and response.text:
+                # print(f"[DEBUG] Gemini Analysis Response: {response.text}") # Debug
+                lines = response.text.split('\n')
+                for line in lines:
+                    if line.upper().startswith("TERMOS:"):
+                        terms_str = line.split(":", 1)[1]
+                        additional_terms = [term.strip() for term in terms_str.split(',') if term.strip()]
+                        if additional_terms:
+                            for term in additional_terms: search_terms_from_gemini.add(term)
+                    elif line.upper().startswith("GENEROS_IDS:"):
+                        ids_str = line.split(":", 1)[1]
+                        try:
+                            genre_hints_from_gemini = [int(gid.strip()) for gid in ids_str.split(',') if gid.strip()]
+                        except ValueError:
+                            print("⚠️ Gemini sugeriu IDs de gênero em formato inválido.") # User-facing: Portuguese
+                
+                if search_terms_from_gemini != {original_interest_query}: # Check if new terms were added
+                    print(f"💡 Termos de busca (original + Gemini): {search_terms_from_gemini}") # User-facing: Portuguese
+                if genre_hints_from_gemini:
+                    print(f"💡 IDs de Gênero sugeridos por Gemini: {genre_hints_from_gemini}") # User-facing: Portuguese
+            else:
+                print("⚠️ Gemini não forneceu análise utilizável.") # User-facing: Portuguese
+        except Exception as e:
+            print(f"🔴 Erro durante a análise de interesses com Gemini: {e}.") # User-facing: Portuguese
+    else:
+        print("ℹ️ Modelo Gemini não disponível. Usando apenas a consulta de interesse original.") # User-facing: Portuguese
+
+    # ETAPA 2: Busca no TMDb usando /search/multi com os termos coletados (original + Gemini)
+    print(f"\nETAPA 2: Tentando /search/multi com termos de busca...") # User-facing: Portuguese
+    # Limit to a few search terms to manage API calls
+    search_queries_to_try = list(search_terms_from_gemini)[:3] # Max 3 search strings for this step
+
+    for page_num in range(1, 3): # Try to fetch first 2 pages
+        if len(all_prospects_map) >= 30 : break # Stop if we have enough prospects
+        for term_query in search_queries_to_try:
+            if not term_query: continue
+            # print(f"  -> Buscando página {page_num} no TMDb /search/multi por: '{term_query}'") # Debug
             search_params = {
-                'query': term, 'include_adult': 'false',
-                'language': TARGET_LANGUAGE_TMDB, 'region': country_code, 'page': 1
+                'query': term_query, 'include_adult': 'false',
+                'language': TARGET_LANGUAGE_TMDB, 'region': country_code, 'page': page_num
             }
             data = make_tmdb_request("/search/multi", params=search_params)
             if data and 'results' in data:
@@ -202,26 +207,20 @@ def agent_content_prospector(user_context):
                                 'tmdb_id': tmdb_id, 'title': title, 'media_type': media_type,
                                 'overview': overview, 'popularity': item.get('popularity', 0.0)
                             }
-    
-    # --- Strategy 3: Popular genres fallback search on TMDb /discover ---
-    if len(all_prospects_map) < 5: # If still few results
-        print(f"\nETAPA 3: Buscas anteriores renderam {len(all_prospects_map)} resultados. Tentando /discover por gêneros populares para a idade...") # User-facing: Portuguese
-        
-        genre_ids_for_fallback = []
-        if child_age <= 7: genre_ids_for_fallback = [16, 10751]  # Animation, Family
-        elif child_age <= 12: genre_ids_for_fallback = [10751, 12, 16, 35] # Family, Adventure, Animation, Comedy
-        else: genre_ids_for_fallback = [12, 14, 878, 35, 18] # Adventure, Fantasy, Sci-Fi, Comedy, Drama
+            if not data or not data.get('results'): break # Stop fetching pages for this term if no more results
 
-        if genre_ids_for_fallback:
-            genre_ids_str = '|'.join(map(str, genre_ids_for_fallback)) 
-            # print(f"  -> Usando /discover do TMDb com IDs de GÊNERO (fallback): {genre_ids_str}") # Debug
+    # ETAPA 3: Se /search/multi rendeu poucos resultados, tentar /discover com GÊNEROS sugeridos por Gemini
+    if len(all_prospects_map) < 15 and genre_hints_from_gemini: # Threshold reduced to 15
+        print(f"\nETAPA 3: Buscas anteriores renderam {len(all_prospects_map)} resultados. Tentando /discover com GÊNEROS do Gemini: {genre_hints_from_gemini}...") # User-facing: Portuguese
+        genre_ids_str = '|'.join(map(str, genre_hints_from_gemini)) # OR logic for genres
+        for page_num in range(1, 3): # Try to fetch first 2 pages
+            if len(all_prospects_map) >= 30 : break
             for media_type_to_discover in ['movie', 'tv']:
                 discover_params = {
                     'with_genres': genre_ids_str, 'include_adult': 'false',
                     'language': TARGET_LANGUAGE_TMDB, 'region': country_code,
-                    'sort_by': 'popularity.desc', 
-                    'vote_count.gte': 50, 
-                    'page': 1
+                    'sort_by': 'popularity.desc', 'vote_count.gte': 20, # Min 20 votes
+                    'page': page_num
                 }
                 data = make_tmdb_request(f"/discover/{media_type_to_discover}", params=discover_params)
                 if data and 'results' in data:
@@ -234,10 +233,44 @@ def agent_content_prospector(user_context):
                                 'tmdb_id': tmdb_id, 'title': title, 'media_type': media_type_to_discover,
                                 'overview': overview, 'popularity': item.get('popularity', 0.0)
                             }
-        # else: # Commented out for less verbose output
-            # print("  -> Nenhum gênero de fallback definido para esta faixa etária.") # User-facing: Portuguese
+                if not data or not data.get('results'): break 
+            if not data or not data.get('results'): break # If one media type has no more pages, stop for this genre search
 
-    final_prospects_list = sorted(list(all_prospects_map.values()), key=lambda x: x['popularity'], reverse=True)[:30] # Increased to 30
+    # ETAPA 4: Fallback por Gêneros Populares para a Idade, se ainda poucos resultados
+    if len(all_prospects_map) < 10: # Threshold reduced to 10
+        print(f"\nETAPA 4: Buscas anteriores renderam {len(all_prospects_map)} resultados. Tentando /discover por GÊNEROS populares genéricos para a idade...") # User-facing: Portuguese
+        genre_ids_for_fallback = []
+        if child_age <= 7: genre_ids_for_fallback = [16, 10751]  # Animation, Family
+        elif child_age <= 12: genre_ids_for_fallback = [10751, 12, 16, 35] # Family, Adventure, Animation, Comedy
+        else: genre_ids_for_fallback = [12, 14, 878, 35, 18] # Adventure, Fantasy, Sci-Fi, Comedy, Drama
+
+        if genre_ids_for_fallback:
+            genre_ids_str = '|'.join(map(str, genre_ids_for_fallback))
+            for page_num in range(1,3): # Try to fetch first 2 pages
+                if len(all_prospects_map) >= 30 : break
+                for media_type_to_discover in ['movie', 'tv']:
+                    discover_params = {
+                        'with_genres': genre_ids_str, 'include_adult': 'false',
+                        'language': TARGET_LANGUAGE_TMDB, 'region': country_code,
+                        'sort_by': 'popularity.desc', 'vote_count.gte': 50,
+                        'page': page_num
+                    }
+                    data = make_tmdb_request(f"/discover/{media_type_to_discover}", params=discover_params)
+                    if data and 'results' in data:
+                        for item in data['results']:
+                            title = item.get('title') if media_type_to_discover == 'movie' else item.get('name')
+                            tmdb_id = item.get('id')
+                            overview = item.get('overview', '')
+                            if title and tmdb_id and len(overview) > 10 and tmdb_id not in all_prospects_map:
+                                all_prospects_map[tmdb_id] = {
+                                    'tmdb_id': tmdb_id, 'title': title, 'media_type': media_type_to_discover,
+                                    'overview': overview, 'popularity': item.get('popularity', 0.0)
+                                }
+                    if not data or not data.get('results'): break
+                if not data or not data.get('results'): break
+
+
+    final_prospects_list = sorted(list(all_prospects_map.values()), key=lambda x: x['popularity'], reverse=True)[:30]
 
     if final_prospects_list:
         print(f"✅ Encontrados {len(final_prospects_list)} prospectos únicos no TMDb após todas as estratégias (ordenados por popularidade).") # User-facing: Portuguese
