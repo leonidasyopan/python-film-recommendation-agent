@@ -154,6 +154,9 @@ movie\_picker\_poc/
 * **Basic Error Handling:** The program includes basic error handling for API calls and some user inputs. A finished application would need more robust error management and clearer user feedback.
 * **Console-Based Interface:** This Proof of Concept is operated entirely via the command line (terminal/console). It does not include a graphical user interface (GUI).
 
+## 📜 License
+
+This project is distributed under the MIT License. See the `LICENSE` file for more details.
+
 ---
 Contributions and suggestions are welcome (if the project were public/open-source)!
-```

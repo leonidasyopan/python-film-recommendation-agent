@@ -151,6 +151,9 @@ selecionador\_filmes\_poc/
 * **Tratamento de Erros Básico:** O programa inclui um tratamento de erros básico para chamadas de API e algumas entradas do usuário. Uma aplicação finalizada precisaria de um gerenciamento de erros mais robusto e feedback mais claro ao usuário.
 * **Interface via Console:** Esta Prova de Conceito é operada inteiramente através da linha de comando (terminal/console). Não possui uma interface gráfica do usuário (GUI).
 
+## 📜 Licença
+
+Este projeto é distribuído sob a Licença MIT. Veja o arquivo `LICENSE` para mais detalhes.
+
 ---
 Contribuições e sugestões são bem-vindas (se o projeto fosse público/aberto)!
-```
